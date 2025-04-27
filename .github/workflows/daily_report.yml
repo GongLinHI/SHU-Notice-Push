@@ -31,7 +31,6 @@ jobs:
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           DEEPSEEK_MODEL: ${{ secrets.DEEPSEEK_MODEL }}
-        continue-on-error: false  # 如果 Python 脚本失败，则中止后续步骤
 
       - name: Get Beijing Time
         id: date
@@ -47,12 +46,12 @@ jobs:
             echo "found=true" >> $GITHUB_OUTPUT
           else
             echo "found=false" >> $GITHUB_OUTPUT
-            echo "::warning file=resources/results::未找到今日的 Markdown 文件，跳过后续步骤。"
-            exit 0  # 找不到文件时跳过后续步骤
+            echo "::error file=resources/results::未找到今日的 Markdown 文件，终止任务。"
+            exit 1  # 找不到���件时直接终止任务
           fi
 
       - name: Render Markdown to HTML
-        if: steps.check_file.outputs.found == 'true' && success()  # 只有在 Python 脚本和检查文件都成功时才执行
+        if: steps.check_file.outputs.found == 'true'  # 只依赖文件存在，失败即终止
         run: |
           sudo apt-get update
           sudo apt-get install -y pandoc
