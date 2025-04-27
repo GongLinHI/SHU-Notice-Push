@@ -1,5 +1,6 @@
 from datetime import datetime
 from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor
 
 from src.entry.notice import Notice
 from src.spider.notice_getter import NoticeGetter
@@ -13,14 +14,17 @@ class Spider:
         notice_list = NoticeGetter.get_notice_list()
         parsed_notice_list: list[Notice] = []
         for notice in notice_list:
-            # print(f"Title: {notice.title}")
-            # print(f"URL: {notice.url}")
-            # print(f"Upload Time: {notice.upload_time}")
-            # print("-" * 40)
             parsed_notice = PageParser.parse(notice)
-            parsed_notice.summary = DeepSeekSummary.get_summary(parsed_notice)
             parsed_notice_list.append(parsed_notice)
-            print(parsed_notice.summary)
+
+        # 使用进程池并行获取summary
+        pool_size = min(len(parsed_notice_list), 10) if parsed_notice_list else 1
+        with ProcessPoolExecutor(max_workers=pool_size) as executor:
+            summaries = list(executor.map(DeepSeekSummary.get_summary, parsed_notice_list))
+
+        for notice, summary in zip(parsed_notice_list, summaries):
+            notice.summary = summary
+
         today_str = datetime.today().strftime("%Y-%m-%d")
         file_path = Path(__file__).parent.parent.parent.joinpath(f"resources/results/{today_str}.md")
         file_path.parent.mkdir(parents=True, exist_ok=True)
