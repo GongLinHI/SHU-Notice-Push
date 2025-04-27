@@ -58,7 +58,7 @@ jobs:
         id: check_file
         if: success()
         run: |
-          if [ -f "${{ github.workspace }}/resources/results/${{ steps.date.outputs.date }}.md" ]; then
+          if [ -f "/resources/results/${{ steps.date.outputs.date }}.md" ]; then
             echo "found=true" >> $GITHUB_OUTPUT
           else
             echo "found=false" >> $GITHUB_OUTPUT
@@ -80,9 +80,35 @@ jobs:
             --metadata "title=Daily Report - ${{ steps.date.outputs.date }}" \
             --css "https://cdn.jsdelivr.net/npm/water.css@2/out/water.min.css" \
             --include-in-header <(echo -e '<style>
-              body { max-width: min(90ch, 100% - 4rem); margin: 2rem auto; font-size: 1.1rem; }
-              h1 { margin-bottom: 1.2em; }
-              blockquote { background: rgba(128, 128, 128, 0.05); border-left: 4px solid #4299e1; padding: 1rem 1.5rem; }
+              :root {
+                --bg: #ffffff;
+                --text: #000000;
+                --accent: #4299e1;
+                --blockquote-bg: rgba(128, 128, 128, 0.05);
+              }
+              @media (prefers-color-scheme: dark) {
+                :root {
+                  --bg: #121212;
+                  --text: #e0e0e0;
+                  --accent: #82aaff;
+                  --blockquote-bg: rgba(255, 255, 255, 0.1);
+                }
+              }
+              body {
+                background-color: var(--bg);
+                color: var(--text);
+                max-width: min(90ch, 100% - 4rem);
+                margin: 2rem auto;
+                font-size: 1.1rem;
+              }
+              h1 {
+                margin-bottom: 1.2em;
+              }
+              blockquote {
+                background: var(--blockquote-bg);
+                border-left: 4px solid var(--accent);
+                padding: 1rem 1.5rem;
+              }
             </style>') \
             -o resources/results/html/${{ steps.date.outputs.date }}.html
 
