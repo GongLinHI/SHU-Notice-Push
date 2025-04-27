@@ -28,6 +28,7 @@ class Spider:
 
         today_str = datetime.today().strftime("%Y-%m-%d")
         file_path = Path(__file__).parent.parent.parent.joinpath(f"resources/results/{today_str}.md")
+        print(f"Writing results to {file_path}")
         file_path.parent.mkdir(parents=True, exist_ok=True)
         with open(file_path, "w", encoding="utf-8") as f:
             if parsed_notice_list:
