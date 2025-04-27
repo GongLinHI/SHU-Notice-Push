@@ -1,0 +1,66 @@
+name: Daily Report
+
+on:
+  schedule:
+    - cron: '0 23 * * *' # 每天 UTC 23:00 = 北京时间 7:00
+  workflow_dispatch:
+
+jobs:
+  generate-and-send:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run Python script
+        run: |
+          python your_script.py
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DEEPSEEK_MODEL: ${{ secrets.DEEPSEEK_MODEL }}
+
+      - name: Get Beijing Time
+        id: date
+        run: |
+          echo "date=$(date -u -d '8 hours' +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      - name: Check if today's markdown file exists
+        id: check_file
+        run: |
+          if [ -f "resources/results/${{ steps.date.outputs.date }}.md" ]; then
+            echo "found=true" >> $GITHUB_OUTPUT
+          else
+            echo "found=false" >> $GITHUB_OUTPUT
+            echo "::warning file=resources/results::未找到今日的 Markdown 文件，跳过后续步骤。"
+          fi
+
+      - name: Render Markdown to HTML
+        if: steps.check_file.outputs.found == 'true'
+        uses: jaywcjlove/markdown-to-html@main
+        with:
+          path: resources/results/${{ steps.date.outputs.date }}.md
+          output: resources/results/html/${{ steps.date.outputs.date }}.html
+
+      - name: Send Email
+        if: steps.check_file.outputs.found == 'true'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.MAIL_SERVER_ADDRESS }}  # 从 Secrets 获取邮件服务器地址
+          server_port: ${{ secrets.MAIL_SERVER_PORT }}        # 从 Secrets 获取邮件服务器端口
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: '每日报告 - ${{ steps.date.outputs.date }}'
+          to: your_email@example.com
+          from: 'GitHub Actions <your_email@example.com>'
+          html_body: file://resources/results/html/${{ steps.date.outputs.date }}.html

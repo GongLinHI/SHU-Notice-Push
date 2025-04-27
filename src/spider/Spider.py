@@ -26,7 +26,8 @@ class Spider:
         file_path.parent.mkdir(parents=True, exist_ok=True)
         with open(file_path, "w", encoding="utf-8") as f:
             if parsed_notice_list:
-                f.write(f"# {today_str} Notice Summary\n")                for notice in parsed_notice_list:
+                f.write(f"# {today_str} Notice Summary\n")
+                for notice in parsed_notice_list:
                     f.write(f"{notice.summary}\n\n")
             else:
                 f.write(f"## No new notices found today ({today_str}).\n")
