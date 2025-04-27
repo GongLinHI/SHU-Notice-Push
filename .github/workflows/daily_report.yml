@@ -13,18 +13,30 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
+        continue-on-error: true
+      - name: Warn on checkout failure
+        if: steps.checkout.outcome == 'failure'
+        run: echo "::warning::Checkout 代码失败，跳过后续步骤。"
 
       - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.12'
+        continue-on-error: true
+        run: |
+          if ! actions/setup-python --version 3.12; then
+            echo "::warning ::Setup Python 失败，跳过后续步骤。"
+            exit 1
+          fi
 
       - name: Install dependencies
+        continue-on-error: true
         run: |
-          pip install -r requirements.txt
+          if ! pip install -r requirements.txt; then
+            echo "::warning file=requirements.txt::依赖安装失败，跳过后续步骤。"
+            exit 1
+          fi
 
       - name: Run Python script
         id: run_python_script
+        if: success()
         run: |
           python -m src.spider.Spider
         working-directory: ${{ github.workspace }}
@@ -32,56 +44,50 @@ jobs:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           DEEPSEEK_MODEL: ${{ secrets.DEEPSEEK_MODEL }}
 
+      - name: Warning if Python script failed
+        if: steps.run_python_script.outcome == 'failure'
+        run: echo "::warning ::Python 脚本执行失败，整个任务标记为失败。"
+
       - name: Get Beijing Time
         id: date
-        if: success()  # 只有在 Python 脚本成功时才执行
+        if: success()
         run: |
           echo "date=$(date -u -d '8 hours' +'%Y-%m-%d')" >> $GITHUB_OUTPUT
 
       - name: Check if today's markdown file exists
         id: check_file
-        if: success()  # 只有在 Python 脚本成功时才执行
+        if: success()
         run: |
-          if [ -f "resources/results/${{ steps.date.outputs.date }}.md" ]; then
+          if [ -f "${{ github.workspace }}/resources/results/${{ steps.date.outputs.date }}.md" ]; then
             echo "found=true" >> $GITHUB_OUTPUT
           else
             echo "found=false" >> $GITHUB_OUTPUT
-            echo "::error file=resources/results::未找到今日的 Markdown 文件，终止任务。"
-            exit 1  # 找不到���件时直接终止任务
+            echo "::warning file=resources/results::未找到今日的 Markdown 文件，跳过后续步骤。"
+            exit 0
           fi
 
       - name: Render Markdown to HTML
-        if: steps.check_file.outputs.found == 'true'  # 只依赖文件存在，失败即终止
+        if: success() && steps.check_file.outputs.found == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y pandoc
           mkdir -p resources/results/html
           pandoc \
-          resources/results/${{ steps.date.outputs.date }}.md \
-          -f markdown \
-          -t html \
-          -s \
-          --metadata "title=Daily Report - ${{ steps.date.outputs.date }}" \
-          --css "https://cdn.jsdelivr.net/npm/water.css@2/out/water.min.css" \  # 系统主题样式
-          --include-in-header <(echo -e '<style>
-            body { 
-              max-width: min(90ch, 100% - 4rem); 
-              margin: 2rem auto; 
-              font-size: 1.1rem;  /* 比默认稍大 */
-            }
-            h1 {
-              margin-bottom: 1.2em; 
-            }
-            blockquote { 
-              background: rgba(128, 128, 128, 0.05); 
-              border-left: 4px solid #4299e1; 
-              padding: 1rem 1.5rem;
-            }
-          </style>') \
-          -o resources/results/html/${{ steps.date.outputs.date }}.html
+            resources/results/${{ steps.date.outputs.date }}.md \
+            -f markdown \
+            -t html \
+            -s \
+            --metadata "title=Daily Report - ${{ steps.date.outputs.date }}" \
+            --css "https://cdn.jsdelivr.net/npm/water.css@2/out/water.min.css" \
+            --include-in-header <(echo -e '<style>
+              body { max-width: min(90ch, 100% - 4rem); margin: 2rem auto; font-size: 1.1rem; }
+              h1 { margin-bottom: 1.2em; }
+              blockquote { background: rgba(128, 128, 128, 0.05); border-left: 4px solid #4299e1; padding: 1rem 1.5rem; }
+            </style>') \
+            -o resources/results/html/${{ steps.date.outputs.date }}.html
 
       - name: Send Email
-        if: steps.check_file.outputs.found == 'true' && success()  # 只有在 Python 脚本和检查文件都成功时才执行
+        if: success() && steps.check_file.outputs.found == 'true'
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: ${{ secrets.MAIL_SERVER_ADDRESS }}
@@ -95,13 +101,13 @@ jobs:
           html_body: file://resources/results/html/${{ steps.date.outputs.date }}.html
 
       - name: Configure Git
-        if: success()  # 只有在 Python 脚本和所有前面的步骤成功时才执行
+        if: success() && steps.check_file.outputs.found == 'true'
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
 
       - name: Commit and Push updated files (excluding html/)
-        if: success()  # 只有在 Python 脚本和所有前面的步骤成功时才执行
+        if: success() && steps.check_file.outputs.found == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
