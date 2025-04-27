@@ -56,11 +56,30 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y pandoc
           mkdir -p resources/results/html
-          pandoc resources/results/${{ steps.date.outputs.date }}.md \
-          -f markdown -t html -s \
-          --metadata title="Daily Report - ${{ steps.date.outputs.date }}" \
-          --css https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css \
+          pandoc \
+          resources/results/${{ steps.date.outputs.date }}.md \
+          -f markdown \
+          -t html \
+          -s \
+          --metadata "title=Daily Report - ${{ steps.date.outputs.date }}" \
+          --css "https://cdn.jsdelivr.net/npm/water.css@2/out/water.min.css" \  # 系统主题样式
+          --include-in-header <(echo -e '<style>
+            body { 
+              max-width: min(90ch, 100% - 4rem); 
+              margin: 2rem auto; 
+              font-size: 1.1rem;  /* 比默认稍大 */
+            }
+            h1 {
+              margin-bottom: 1.2em; 
+            }
+            blockquote { 
+              background: rgba(128, 128, 128, 0.05); 
+              border-left: 4px solid #4299e1; 
+              padding: 1rem 1.5rem;
+            }
+          </style>') \
           -o resources/results/html/${{ steps.date.outputs.date }}.html
+
 
       - name: Send Email
         if: steps.check_file.outputs.found == 'true' && success()  # 只有在 Python 脚本和检查文件都成功时才执行
@@ -95,3 +114,4 @@ jobs:
           else
             git commit -m "Update notice_records.csv and results (excluding html) [bot commit]"
             git push origin HEAD:${{ github.ref }}
+          fi
