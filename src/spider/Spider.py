@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor
 
@@ -26,7 +26,7 @@ class Spider:
         for notice, summary in zip(parsed_notice_list, summaries):
             notice.summary = summary
 
-        today_str = datetime.today().strftime("%Y-%m-%d")
+        today_str = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
         file_path = Path(__file__).parent.parent.parent.joinpath(f"resources/results/{today_str}.md")
         print(f"Writing results to {file_path}")
         file_path.parent.mkdir(parents=True, exist_ok=True)
