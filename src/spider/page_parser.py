@@ -3,7 +3,7 @@ import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
 
-from entry.notice import Notice
+from src.entry.notice import Notice
 
 
 class PageParser:
