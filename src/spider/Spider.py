@@ -12,6 +12,7 @@ class Spider:
     @staticmethod
     def run():
         notice_list = NoticeGetter.get_notice_list()
+        print(f"Fetched {len(notice_list)} new notices.")
         parsed_notice_list: list[Notice] = []
         for notice in notice_list:
             parsed_notice = PageParser.parse(notice)
