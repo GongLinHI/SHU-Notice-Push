@@ -8,7 +8,7 @@ on:
 jobs:
   generate-and-send:
     runs-on: ubuntu-latest
-    environment: Ubuntu-Python        # ← 新增这一行：指定使用 Environment Secrets
+    environment: Ubuntu-Python
 
     steps:
       - name: Checkout code
@@ -26,7 +26,7 @@ jobs:
       - name: Run Python script
         run: |
           python -m src.spider.Spider
-        working-directory: ${{ github.workspace }}  # 确保工作路径是项目的根目录
+        working-directory: ${{ github.workspace }}
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           DEEPSEEK_MODEL: ${{ secrets.DEEPSEEK_MODEL }}
@@ -65,5 +65,22 @@ jobs:
           password: ${{ secrets.MAIL_PASSWORD }}
           subject: '每日报告 - ${{ steps.date.outputs.date }}'
           to: ${{ secrets.MAIL_TO }}
-          from: 'GitHub Actions <your_email@example.com>'
+          from: ${{ secrets.MAIL_USERNAME }}
           html_body: file://resources/results/html/${{ steps.date.outputs.date }}.html
+
+      - name: Configure Git
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+
+      - name: Commit and Push updated files (excluding html/)
+        run: |
+          git add resources/notice_records.csv
+          git add resources/results
+          git restore --staged resources/results/html
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Update notice_records.csv and results (excluding html) [bot commit]"
+            git push
+          fi
