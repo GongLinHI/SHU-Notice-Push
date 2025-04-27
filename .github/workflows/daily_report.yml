@@ -8,6 +8,7 @@ on:
 jobs:
   generate-and-send:
     runs-on: ubuntu-latest
+    environment: Ubuntu-Python        # ← 新增这一行：指定使用 Environment Secrets
 
     steps:
       - name: Checkout code
