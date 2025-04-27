@@ -24,20 +24,24 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run Python script
+        id: run_python_script
         run: |
           python -m src.spider.Spider
         working-directory: ${{ github.workspace }}
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           DEEPSEEK_MODEL: ${{ secrets.DEEPSEEK_MODEL }}
+        continue-on-error: false  # 如果 Python 脚本失败，则中止后续步骤
 
       - name: Get Beijing Time
         id: date
+        if: success()  # 只有在 Python 脚本成功时才执行
         run: |
           echo "date=$(date -u -d '8 hours' +'%Y-%m-%d')" >> $GITHUB_OUTPUT
 
       - name: Check if today's markdown file exists
         id: check_file
+        if: success()  # 只有在 Python 脚本成功时才执行
         run: |
           if [ -f "resources/results/${{ steps.date.outputs.date }}.md" ]; then
             echo "found=true" >> $GITHUB_OUTPUT
@@ -47,15 +51,19 @@ jobs:
           fi
 
       - name: Render Markdown to HTML
-        if: steps.check_file.outputs.found == 'true'
+        if: steps.check_file.outputs.found == 'true' && success()  # 只有在 Python 脚本和检查文件都成功时才执行
         run: |
           sudo apt-get update
           sudo apt-get install -y pandoc
           mkdir -p resources/results/html
-          pandoc resources/results/${{ steps.date.outputs.date }}.md -f markdown -t html -s -o resources/results/html/${{ steps.date.outputs.date }}.html
+          pandoc resources/results/${{ steps.date.outputs.date }}.md \
+          -f markdown -t html -s \
+          --metadata title="Daily Report - ${{ steps.date.outputs.date }}" \
+          --css https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css \
+          -o resources/results/html/${{ steps.date.outputs.date }}.html
 
       - name: Send Email
-        if: steps.check_file.outputs.found == 'true'
+        if: steps.check_file.outputs.found == 'true' && success()  # 只有在 Python 脚本和检查文件都成功时才执行
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: ${{ secrets.MAIL_SERVER_ADDRESS }}
@@ -69,11 +77,15 @@ jobs:
           html_body: file://resources/results/html/${{ steps.date.outputs.date }}.html
 
       - name: Configure Git
+        if: success()  # 只有在 Python 脚本和所有前面的步骤成功时才执行
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
 
       - name: Commit and Push updated files (excluding html/)
+        if: success()  # 只有在 Python 脚本和所有前面的步骤成功时才执行
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git add resources/notice_records.csv
           git add resources/results
@@ -82,5 +94,4 @@ jobs:
             echo "No changes to commit."
           else
             git commit -m "Update notice_records.csv and results (excluding html) [bot commit]"
-            git push
-          fi
+            git push origin HEAD:${{ github.ref }}
