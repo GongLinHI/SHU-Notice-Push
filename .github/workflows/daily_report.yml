@@ -58,7 +58,7 @@ jobs:
         id: check_file
         if: success()
         run: |
-          if [ -f "${{ github.workspace }}/resources/results/${{ steps.date.outputs.date }}.md" ]; then
+          if [ -f "/resources/results/${{ steps.date.outputs.date }}.md" ]; then
             echo "found=true" >> $GITHUB_OUTPUT
           else
             echo "found=false" >> $GITHUB_OUTPUT
@@ -74,32 +74,10 @@ jobs:
           mkdir -p resources/results/html
           pandoc \
             resources/results/${{ steps.date.outputs.date }}.md \
-            -f markdown \
-            -t html \
-            -s \
-            --metadata "title=Daily Report - ${{ steps.date.outputs.date }}" \
-            --include-in-header <(cat <<'EOF'
-            <link rel="stylesheet"
-                  href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown-light.min.css"
-                  media="(prefers-color-scheme: light)">
-            <link rel="stylesheet"
-                  href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown-dark.min.css"
-                  media="(prefers-color-scheme: dark)">
-            <style>
-              body { background-color: transparent; }
-              .markdown-body {
-                box-sizing: border-box;
-                min-width: 200px;
-                max-width: 980px;
-                margin: 2rem auto;
-                padding: 0 1rem;
-              }
-            </style>
-            EOF
-            ) \
-            --include-before-body '<article class="markdown-body">' \
-            --include-after-body '</article>' \
+            -f markdown -t html -s \
+            --css https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown-light.min.css \
             -o resources/results/html/${{ steps.date.outputs.date }}.html
+
 
       - name: Send Email
         if: success() && steps.check_file.outputs.found == 'true'
