@@ -58,7 +58,7 @@ jobs:
         id: check_file
         if: success()
         run: |
-          if [ -f "/resources/results/${{ steps.date.outputs.date }}.md" ]; then
+          if [ -f "${{ github.workspace }}/resources/results/${{ steps.date.outputs.date }}.md" ]; then
             echo "found=true" >> $GITHUB_OUTPUT
           else
             echo "found=false" >> $GITHUB_OUTPUT
@@ -99,7 +99,6 @@ jobs:
                   padding: 0 1rem;
                 }
               </style>
-              EOF
               ) \
             --include-before-body '<article class="markdown-body">' \
             --include-after-body '</article>' \
