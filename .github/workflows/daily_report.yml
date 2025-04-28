@@ -79,27 +79,24 @@ jobs:
             -s \
             --metadata "title=Daily Report - ${{ steps.date.outputs.date }}" \
             --include-in-header <(cat <<'EOF'
-              <link rel="stylesheet"
-                    href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown-light.min.css"
-                    media="(prefers-color-scheme: light)">
-              <link rel="stylesheet"
-                    href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown-dark.min.css"
-                    media="(prefers-color-scheme: dark)">
-              <style>
-                /* 保证背景透明，让外层背景色透出来 */
-                body {
-                  background-color: transparent;
-                }
-                /* 容器调整 */
-                .markdown-body {
-                  box-sizing: border-box;
-                  min-width: 200px;
-                  max-width: 980px;
-                  margin: 2rem auto;
-                  padding: 0 1rem;
-                }
-              </style>
-              ) \
+            <link rel="stylesheet"
+                  href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown-light.min.css"
+                  media="(prefers-color-scheme: light)">
+            <link rel="stylesheet"
+                  href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown-dark.min.css"
+                  media="(prefers-color-scheme: dark)">
+            <style>
+              body { background-color: transparent; }
+              .markdown-body {
+                box-sizing: border-box;
+                min-width: 200px;
+                max-width: 980px;
+                margin: 2rem auto;
+                padding: 0 1rem;
+              }
+            </style>
+            EOF
+            ) \
             --include-before-body '<article class="markdown-body">' \
             --include-after-body '</article>' \
             -o resources/results/html/${{ steps.date.outputs.date }}.html
