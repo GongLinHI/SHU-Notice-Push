@@ -2,7 +2,7 @@ name: Daily Report
 
 on:
   schedule:
-    - cron: '0 23 * * *' # 每天 UTC 23:00 = 北京时间 7:00
+    - cron: '0 17 * * *' # 每天 UTC 17:00 执行, 即北京时间 1:00
   workflow_dispatch:
 
 jobs:

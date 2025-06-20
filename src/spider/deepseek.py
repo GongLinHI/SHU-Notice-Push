@@ -12,7 +12,7 @@ from src.entry.notice import Notice
 
 
 class DeepSeekClient:
-    _base_url = "https://api.deepseek.com"
+    _BASE_URL = "https://api.deepseek.com"
     _DEFAULT_MODEL = "deepseek-chat"
     _ENV_DEEPSEEK_API_KEY = "DEEPSEEK_API_KEY"
     _ENV_DEEPSEEK_MODEL = "DEEPSEEK_MODEL"
@@ -24,7 +24,7 @@ class DeepSeekClient:
         if not self._api_key:
             raise ValueError("DeepSeek API key must be provided via argument or DEEPSEEK_API_KEY environment variable")
         self._model = model or os.getenv(self._ENV_DEEPSEEK_MODEL, self._DEFAULT_MODEL)
-        self._client = OpenAI(api_key=self._api_key, base_url=self._base_url)
+        self._client = OpenAI(api_key=self._api_key, base_url=self._BASE_URL)
 
     # region Property Getters
     @property
@@ -48,7 +48,7 @@ class DeepSeekClient:
     def api_key(self, value: str) -> None:
         """设置新的API Key并重置客户端连接"""
         self._api_key = value
-        self._client = OpenAI(api_key=value, base_url=self._base_url)
+        self._client = OpenAI(api_key=value, base_url=self._BASE_URL)
 
     @model.setter
     def model(self, value: str) -> None:

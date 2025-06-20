@@ -32,11 +32,11 @@ class Spider:
         file_path.parent.mkdir(parents=True, exist_ok=True)
         with open(file_path, "w", encoding="utf-8") as f:
             if parsed_notice_list:
-                f.write(f"# {today_str} Notice Summary\n")
+                f.write(f"## {today_str} 新通知汇总\n")
                 for notice in parsed_notice_list:
                     f.write(f"{notice.summary}\n\n")
             else:
-                f.write(f"## No new notices found today ({today_str}).\n")
+                f.write(f"{today_str}没有新通知.\n")
 
 
 if __name__ == '__main__':
