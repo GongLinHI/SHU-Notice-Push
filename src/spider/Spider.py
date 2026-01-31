@@ -18,6 +18,10 @@ class Spider:
             parsed_notice = PageParser.parse(notice)
             parsed_notice_list.append(parsed_notice)
 
+        if not parsed_notice_list:
+            print("No new notices found today.")
+            return 1
+
         # 使用进程池并行获取summary
         pool_size = min(len(parsed_notice_list), 10) if parsed_notice_list else 1
         with ProcessPoolExecutor(max_workers=pool_size) as executor:
@@ -31,12 +35,11 @@ class Spider:
         print(f"Writing results to {file_path}")
         file_path.parent.mkdir(parents=True, exist_ok=True)
         with open(file_path, "w", encoding="utf-8") as f:
-            if parsed_notice_list:
-                f.write(f"## {today_str} 新通知汇总\n")
-                for notice in parsed_notice_list:
-                    f.write(f"{notice.summary}\n\n")
-            else:
-                f.write(f"{today_str}没有新通知.\n")
+            f.write(f"## {today_str} 新通知汇总\n")
+            for notice in parsed_notice_list:
+                f.write(f"{notice.summary}\n\n")
+
+        return 0
 
 
 if __name__ == '__main__':
