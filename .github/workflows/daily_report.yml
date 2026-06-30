@@ -2,8 +2,11 @@ name: Daily Report
 
 on:
   schedule:
-    - cron: '0 17 * * *' # 每天 UTC 17:00 执行, 即北京时间 1:00
+    - cron: '0 17 * * *' # 每天 UTC 17:00 执行，即北京时间 1:00
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   generate-and-send:
@@ -12,89 +15,97 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
-        continue-on-error: true
-      - name: Warn on checkout failure
-        if: steps.checkout.outcome == 'failure'
-        run: echo "::warning::Checkout 代码失败，跳过后续步骤。"
+        uses: actions/checkout@v4
 
       - name: Setup Python
-        continue-on-error: true
-        run: |
-          if ! actions/setup-python --version 3.12; then
-            echo "::warning ::Setup Python 失败，跳过后续步骤。"
-            exit 1
-          fi
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
 
       - name: Install dependencies
-        continue-on-error: true
-        run: |
-          if ! pip install -r requirements.txt; then
-            echo "::warning file=requirements.txt::依赖安装失败，跳过后续步骤。"
-            exit 1
-          fi
-
-      - name: Run Python script
-        id: run_python_script
-        if: success()
-        run: |
-          python -m src.spider.Spider
-          exit_code=$?
-          echo "exit_code=$exit_code" >> $GITHUB_OUTPUT
-        working-directory: ${{ github.workspace }}
-        env:
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          DEEPSEEK_MODEL: ${{ secrets.DEEPSEEK_MODEL }}
-
-      - name: Warning if Python script failed
-        if: steps.run_python_script.outcome == 'failure'
-        run: echo "::warning ::Python 脚本执行失败，整个任务标记为失败。"
-
-      - name: Check if there are new notices
-        id: check_notices
-        if: success()
-        run: |
-          if [ "${{ steps.run_python_script.outputs.exit_code }}" -eq 0 ]; then
-            echo "has_new_notices=true" >> $GITHUB_OUTPUT
-            echo "Found new notices, proceeding with subsequent steps."
-          else
-            echo "has_new_notices=false" >> $GITHUB_OUTPUT
-            echo "No new notices found today, skipping subsequent steps."
-          fi
+        run: pip install -r requirements.txt
 
       - name: Get Beijing Time
         id: date
-        if: success() && steps.check_notices.outputs.has_new_notices == 'true'
-        run: |
-          echo "date=$(date -u -d '8 hours' +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+        run: echo "date=$(TZ='Asia/Shanghai' date +'%Y-%m-%d')" >> "$GITHUB_OUTPUT"
 
-      - name: Check if today's markdown file exists
-        id: check_file
-        if: success() && steps.check_notices.outputs.has_new_notices == 'true'
+      - name: Run notice pipeline
+        id: run_python_script
         run: |
-          if [ -f "resources/results/${{ steps.date.outputs.date }}.md" ]; then
-            echo "found=true" >> $GITHUB_OUTPUT
-          else
-            echo "found=false" >> $GITHUB_OUTPUT
-            echo "::warning file=resources/results::未找到今日的 Markdown 文件，跳过后续步骤。"
-            exit 0
+          set +e
+          output=$(python -m src.notice_push --profile daily --date "${{ steps.date.outputs.date }}" 2>&1)
+          exit_code=$?
+          echo "$output"
+          printf '%s\n' "$output" > "$RUNNER_TEMP/notice_pipeline.log"
+
+          new_count=$(echo "$output" | awk -F= '/^new_count=/{print $2}' | tail -n1)
+          summarized_count=$(echo "$output" | awk -F= '/^summarized_count=/{print $2}' | tail -n1)
+          failed_count=$(echo "$output" | awk -F= '/^failed_count=/{print $2}' | tail -n1)
+          source_error_count=$(echo "$output" | awk -F= '/^source_error_count=/{print $2}' | tail -n1)
+
+          if [ "$exit_code" -ne 0 ] && [ "$exit_code" -ne 1 ]; then
+            echo "::error::Notice pipeline exited with unexpected code $exit_code."
+            exit_code=2
+          elif [ "$exit_code" -eq 1 ] && ! echo "$output" | grep -q '^new_count='; then
+            echo "::error::Notice pipeline failed before reporting counts."
+            exit_code=2
           fi
 
-      - name: Render Markdown to HTML
-        if: success() && steps.check_file.outputs.found == 'true'
+          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+          echo "new_count=${new_count:-0}" >> "$GITHUB_OUTPUT"
+          echo "summarized_count=${summarized_count:-0}" >> "$GITHUB_OUTPUT"
+          echo "failed_count=${failed_count:-0}" >> "$GITHUB_OUTPUT"
+          echo "source_error_count=${source_error_count:-0}" >> "$GITHUB_OUTPUT"
+          echo "log_path=$RUNNER_TEMP/notice_pipeline.log" >> "$GITHUB_OUTPUT"
+          exit 0
+        working-directory: ${{ github.workspace }}
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DEEPSEEK_MODEL: ${{ secrets.DEEPSEEK_MODEL || 'deepseek-chat' }}
+          PROMPT_NAME: ${{ vars.PROMPT_NAME || 'notice_summary_v1' }}
+          SUMMARY_MAX_WORKERS: ${{ vars.SUMMARY_MAX_WORKERS || '3' }}
+          SOURCE_SHU_OFFICIAL_ENABLED: ${{ vars.SOURCE_SHU_OFFICIAL_ENABLED || 'true' }}
+          SOURCE_MANAGEMENT_SCHOOL_ENABLED: ${{ vars.SOURCE_MANAGEMENT_SCHOOL_ENABLED || 'true' }}
+          SOURCE_GRADUATE_SCHOOL_ENABLED: ${{ vars.SOURCE_GRADUATE_SCHOOL_ENABLED || 'true' }}
+
+      - name: Check if there are new notices
+        id: check_notices
         run: |
-          sudo apt-get update
-          sudo apt-get install -y pandoc
-          mkdir -p resources/results/html
-          pandoc \
-            resources/results/${{ steps.date.outputs.date }}.md \
-            -f markdown -t html -s \
-            --css https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown-light.min.css \
-            -o resources/results/html/${{ steps.date.outputs.date }}.html
+          if [ "${{ steps.run_python_script.outputs.exit_code }}" = "0" ]; then
+            echo "has_new_notices=true" >> "$GITHUB_OUTPUT"
+            echo "Found reportable notices or failures."
+          else
+            echo "has_new_notices=false" >> "$GITHUB_OUTPUT"
+            echo "No reportable new notices found today; source_error_count=${{ steps.run_python_script.outputs.source_error_count }}."
+          fi
 
+      - name: Prepare operational alert email
+        id: prepare_alert
+        if: steps.run_python_script.outputs.source_error_count != '0' || steps.run_python_script.outputs.exit_code == '2'
+        run: |
+          alert_file="$RUNNER_TEMP/notice_alert.html"
+          {
+            echo '<!doctype html><html><body style="font-family:Arial,sans-serif;line-height:1.6;color:#1f2937;">'
+            echo '<h2>上海大学通知推送运行异常</h2>'
+            echo '<p>本邮件只表示爬虫运行或源站访问异常，不代表今日存在新通知。</p>'
+            echo '<ul>'
+            echo '<li>报告日期: ${{ steps.date.outputs.date }}</li>'
+            echo '<li>pipeline_exit_code: ${{ steps.run_python_script.outputs.exit_code }}</li>'
+            echo '<li>source_error_count: ${{ steps.run_python_script.outputs.source_error_count }}</li>'
+            echo '<li>failed_count: ${{ steps.run_python_script.outputs.failed_count }}</li>'
+            echo '<li>workflow: <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">查看 GitHub Actions 日志</a></li>'
+            echo '</ul>'
+            echo '<h3>Pipeline 输出</h3>'
+            echo '<pre style="white-space:pre-wrap;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;padding:12px;">'
+            sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g' "${{ steps.run_python_script.outputs.log_path }}"
+            echo '</pre>'
+            echo '</body></html>'
+          } > "$alert_file"
+          echo "alert_path=$alert_file" >> "$GITHUB_OUTPUT"
 
-      - name: Send Email
-        if: success() && steps.check_file.outputs.found == 'true'
+      - name: Send operational alert email
+        if: steps.run_python_script.outputs.source_error_count != '0' || steps.run_python_script.outputs.exit_code == '2'
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: ${{ secrets.MAIL_SERVER_ADDRESS }}
@@ -102,28 +113,81 @@ jobs:
           secure: true
           username: ${{ secrets.MAIL_USERNAME }}
           password: ${{ secrets.MAIL_PASSWORD }}
-          subject: '每日报告 - ${{ steps.date.outputs.date }}'
+          subject: '上海大学通知推送运行异常 - ${{ steps.date.outputs.date }} - 源站异常 ${{ steps.run_python_script.outputs.source_error_count }} 个'
+          to: ${{ secrets.MAIL_TO }}
+          from: ${{ secrets.MAIL_USERNAME }}
+          html_body: file://${{ steps.prepare_alert.outputs.alert_path }}
+
+      - name: Fail if notice pipeline errored
+        if: steps.run_python_script.outputs.exit_code == '2'
+        run: |
+          echo "::error::Python 脚本执行失败，exit_code=${{ steps.run_python_script.outputs.exit_code }}。"
+          exit 1
+
+      - name: Check if today's markdown file exists
+        id: check_file
+        if: steps.check_notices.outputs.has_new_notices == 'true'
+        run: |
+          if [ -f "resources/results/${{ steps.date.outputs.date }}.md" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "::warning file=resources/results::未找到今日的 Markdown 文件，跳过后续步骤。"
+          fi
+
+      - name: Render Markdown to HTML
+        if: steps.check_file.outputs.found == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc
+          mkdir -p resources/results/html
+          pandoc \
+            resources/results/${{ steps.date.outputs.date }}.md \
+            -f markdown -t html5 --standalone \
+            --template=resources/templates/daily_report.html \
+            --metadata=title:上海大学通知汇总 \
+            --metadata=report_date:${{ steps.date.outputs.date }} \
+            --metadata=new_count:${{ steps.run_python_script.outputs.new_count }} \
+            --metadata=summarized_count:${{ steps.run_python_script.outputs.summarized_count }} \
+            --metadata=failed_count:${{ steps.run_python_script.outputs.failed_count }} \
+            -o resources/results/html/${{ steps.date.outputs.date }}.html
+
+      - name: Send Email
+        if: steps.check_file.outputs.found == 'true'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.MAIL_SERVER_ADDRESS }}
+          server_port: ${{ secrets.MAIL_SERVER_PORT }}
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: '上海大学通知汇总 - ${{ steps.date.outputs.date }} - 新增 ${{ steps.run_python_script.outputs.new_count }} 条'
           to: ${{ secrets.MAIL_TO }}
           from: ${{ secrets.MAIL_USERNAME }}
           html_body: file://resources/results/html/${{ steps.date.outputs.date }}.html
 
       - name: Configure Git
-        if: success() && steps.check_file.outputs.found == 'true'
+        if: steps.check_file.outputs.found == 'true' || steps.run_python_script.outputs.exit_code == '1'
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
 
-      - name: Commit and Push updated files (excluding html/)
-        if: success() && steps.check_file.outputs.found == 'true'
+      - name: Commit and Push updated files
+        if: steps.check_file.outputs.found == 'true' || steps.run_python_script.outputs.exit_code == '1'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git add resources/notice_records.csv
-          git add resources/results
-          git restore --staged resources/results/html
+          if [ "${{ steps.check_file.outputs.found }}" = "true" ]; then
+            git add resources/results
+          fi
+          if [ -f resources/notice_state.sqlite3 ]; then
+            git add resources/notice_state.sqlite3
+          fi
+          git restore --staged resources/results/html || true
+
           if git diff --cached --quiet; then
             echo "No changes to commit."
           else
-            git commit -m "Update notice_records.csv and results (excluding html) [bot commit]"
+            git commit -m "Update notice state and daily report [bot commit]"
             git push origin HEAD:${{ github.ref }}
           fi

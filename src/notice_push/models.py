@@ -1,0 +1,119 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+
+@dataclass(frozen=True)
+class NoticeSource:
+    id: str
+    name: str
+    base_url: str
+    list_url: str
+    adapter: str
+    enabled: bool = True
+
+
+@dataclass(frozen=True)
+class Attachment:
+    name: str
+    url: str
+
+
+@dataclass(frozen=True)
+class NoticeListItem:
+    source_id: str
+    url: str
+    canonical_url: str
+    title: str
+    published_at: Optional[datetime] = None
+    list_excerpt: str = ""
+
+
+@dataclass(frozen=True)
+class NoticeDetail:
+    source_id: str
+    url: str
+    canonical_url: str
+    title: str
+    content: str
+    published_at: Optional[datetime] = None
+    list_excerpt: str = ""
+    attachments: tuple[Attachment, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class NoticeSummary:
+    notice_id: int
+    markdown: str
+    model: str
+    prompt_version: str
+    generated_at: datetime
+
+
+@dataclass(frozen=True)
+class FailedNotice:
+    source_id: str
+    title: str
+    url: str
+    reason: str
+    published_at: Optional[datetime] = None
+    source_name: str = ""
+
+
+@dataclass(frozen=True)
+class SourceError:
+    source_id: str
+    source_name: str
+    url: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class PipelineResult:
+    report_path: Optional[Path]
+    new_count: int
+    summarized_count: int
+    failed: tuple[FailedNotice, ...] = field(default_factory=tuple)
+    source_errors: tuple[SourceError, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class NoticeRuntimeProfile:
+    name: str
+    max_pages_per_source: Optional[int]
+    stop_after_seen_pages: Optional[int]
+    detail_max_workers: int
+    summary_max_workers: int
+    http_timeout: int
+    http_max_retries: int
+    http_initial_retry_delay: float
+
+
+@dataclass(frozen=True)
+class AppConfig:
+    repo_root: Path
+    state_path: Path
+    output_dir: Path
+    prompt_name: str
+    deepseek_model: str
+    summary_max_workers: int
+    max_pages_per_source: int
+    stop_after_seen_pages: int
+    detail_min_chars: int
+    runtime_profiles: dict[str, NoticeRuntimeProfile]
+    sources: tuple[NoticeSource, ...]
+
+    def source_by_id(self, source_id: str) -> NoticeSource:
+        for source in self.sources:
+            if source.id == source_id:
+                return source
+        raise KeyError(source_id)
+
+    def runtime_profile(self, profile_name: str) -> NoticeRuntimeProfile:
+        try:
+            return self.runtime_profiles[profile_name]
+        except KeyError as exc:
+            raise KeyError(profile_name) from exc

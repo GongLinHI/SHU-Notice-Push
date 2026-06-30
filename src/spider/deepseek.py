@@ -1,23 +1,24 @@
-from dotenv import load_dotenv
-
-load_dotenv()  # 默认会加载根目录下的.env文件
-
 import os
 from pathlib import Path
 from typing import Optional
 
+from dotenv import load_dotenv
 from openai import OpenAI
 
 from src.entry.notice import Notice
+from src.notice_push.config import load_config
+from src.notice_push.models import NoticeDetail
+from src.notice_push.summarizer import NoticeSummarizer, load_prompt
 
 
 class DeepSeekClient:
     _BASE_URL = "https://api.deepseek.com"
-    _DEFAULT_MODEL = "deepseek-chat"
+    _DEFAULT_MODEL = "deepseek-v4-flash"
     _ENV_DEEPSEEK_API_KEY = "DEEPSEEK_API_KEY"
     _ENV_DEEPSEEK_MODEL = "DEEPSEEK_MODEL"
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
+        load_dotenv()
         # 优先从环境变量读取
         self._api_key = api_key or os.getenv(self._ENV_DEEPSEEK_API_KEY)
         # print(f"API Key: {self._api_key}")
@@ -76,35 +77,40 @@ class DeepSeekClient:
 
 
 class DeepSeekSummary:
-    _client = DeepSeekClient()
+    _client = None
     _system_prompt = None
 
     @classmethod
-    def set_system_prompt(cls):
+    def get_client(cls) -> DeepSeekClient:
+        if cls._client is None:
+            cls._client = DeepSeekClient()
+        return cls._client
+
+    @classmethod
+    def set_system_prompt(cls, prompt_name: str = "notice_summary_v1"):
         """
-        设置系统提示词
+        设置系统提示词。旧接口保留为兼容层，实际读取新的版本化 prompt。
         """
-        path = Path(__file__).parent.parent.parent.joinpath('resources/system_prompt.md')
-        if not path.exists():
-            raise FileNotFoundError(f"System prompt file not found: {path}")
-        with path.open('r', encoding='utf-8') as file:
-            cls._system_prompt = file.read()
-            # print(cls._system_prompt)
+        prompt_dir = Path(__file__).parent.parent.parent.joinpath("resources", "prompts")
+        cls._system_prompt = load_prompt(prompt_dir, prompt_name)
 
     @classmethod
     def get_summary(cls, notice: Notice):
         """
-        获取通知公告的摘要
+        获取通知公告的摘要。旧接口委托给新的 NoticeSummarizer，避免维护两套摘要链路。
         """
-        if cls._system_prompt is None:
-            cls.set_system_prompt()
-
-        user_prompt = \
-            f'''
-- 标题：{notice.title}
-- 发布时间：{notice.upload_time}
-- 正文：{notice.content}
-- url：{notice.url}
-'''
-        response_text = cls._client.chat(system_prompt=cls._system_prompt, user_prompt=user_prompt)
-        return response_text
+        config = load_config()
+        summarizer = NoticeSummarizer(
+            prompt_dir=config.repo_root / "resources" / "prompts",
+            prompt_name=config.prompt_name,
+            model=config.deepseek_model,
+        )
+        detail = NoticeDetail(
+            source_id="shu_official",
+            url=notice.url,
+            canonical_url=notice.url,
+            title=notice.title or "",
+            content=notice.content or "",
+            published_at=None,
+        )
+        return summarizer.summarize(0, detail, source_name="上海大学官网").markdown

@@ -1,0 +1,44 @@
+prompt_name: notice_summary_v1
+deepseek_model: deepseek-chat
+summary_max_workers: 3
+max_pages_per_source: 3
+stop_after_seen_pages: 2
+detail_min_chars: 30
+
+sources:
+  shu_official:
+    name: 上海大学官网
+    base_url: https://www.shu.edu.cn/
+    list_url: https://www.shu.edu.cn/tzgg.htm
+    adapter: src.notice_push.sources.shu_official.ShuOfficialAdapter
+    enabled: true
+  management_school:
+    name: 上海大学管理学院
+    base_url: https://ms.shu.edu.cn/
+    list_url: https://ms.shu.edu.cn/syzl/zytz.htm
+    adapter: src.notice_push.sources.management_school.ManagementSchoolAdapter
+    enabled: true
+  graduate_school:
+    name: 上海大学研究生院
+    base_url: https://gs.shu.edu.cn/
+    list_url: https://gs.shu.edu.cn/xwlb/sy.htm
+    adapter: src.notice_push.sources.graduate_school.GraduateSchoolAdapter
+    enabled: true
+
+profiles:
+  daily:
+    max_pages_per_source: 5
+    stop_after_seen_pages: 2
+    detail_max_workers: 2
+    summary_max_workers: 3
+    http_timeout: 12
+    http_max_retries: 2
+    http_initial_retry_delay: 0.8
+  backfill:
+    max_pages_per_source:
+    stop_after_seen_pages:
+    detail_max_workers: 4
+    summary_max_workers: 3
+    http_timeout: 20
+    http_max_retries: 3
+    http_initial_retry_delay: 1.0

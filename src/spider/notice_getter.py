@@ -1,115 +1,111 @@
-from pathlib import Path
+from __future__ import annotations
 
-import requests
-from bs4 import BeautifulSoup
-from src.entry.notice import Notice
-import os
 import csv
+import hashlib
+from datetime import datetime
+from pathlib import Path
+from typing import Iterable
+
+from src.entry.notice import Notice
+from src.notice_push.config import load_config
+from src.notice_push.http import HttpClient
+from src.notice_push.models import NoticeListItem
+from src.notice_push.sources.shu_official import ShuOfficialAdapter
+from src.notice_push.storage import NoticeStorage
 
 
 class NoticeGetter:
-    _base_url = "https://www.shu.edu.cn/"
-    _notice_list_url = "https://www.shu.edu.cn/tzgg.htm"
-    _default_encoding = "utf-8"
+    """Compatibility wrapper for the legacy Shanghai University notice getter."""
 
     @classmethod
-    def fetch_notice_list(cls):
-        """
-        获取所有通知，返回Notice对象列表
-        """
-        response = requests.get(cls._notice_list_url)
-        response.raise_for_status()
-        htmlcontent = response.content.decode(cls._default_encoding)
-        soup = BeautifulSoup(htmlcontent, "html.parser")
-        ej_main = soup.find("div", class_="ej_main")
-        if not ej_main:
-            return []
-        ul = ej_main.find("ul")
-        if not ul:
-            return []
-        notices = []
-        for li in ul.find_all("li"):
-            a = li.find("a", href=True)
-            if not a:
-                continue
-            url = a["href"]
-            if not url.startswith("http"):
-                url = cls._base_url + url.lstrip("/")
-            title_tag = a.find("p", class_="bt")
-            title = title_tag.get_text(strip=True) if title_tag else None
-            summary_tag = a.find("p", class_="zy")
-            summary = summary_tag.get_text(strip=True) if summary_tag else None
-            date_tag = a.find("p", class_="sj")
-            upload_time = None
-            if date_tag:
-                try:
-                    # 日期格式如 2025.04.21
-                    from datetime import datetime
-                    upload_time = datetime.strptime(date_tag.get_text(strip=True), "%Y.%m.%d").date()
-                except Exception:
-                    upload_time = None
-            notice = Notice(
-                url=url,
-                title=title,
-                # summary=summary,
-                upload_time=upload_time
-            )
-            notices.append(notice)
-        return notices
+    def fetch_notice_list(cls, http_client: HttpClient | None = None) -> list[Notice]:
+        config = load_config(env={})
+        source = config.source_by_id("shu_official")
+        adapter = ShuOfficialAdapter(source)
+        html = (http_client or HttpClient()).get_text(source.list_url)
+        return [_notice_from_item(item) for item in adapter.parse_list_page(html, source.list_url)]
 
     @classmethod
-    def dedup_and_save_to_csv(cls, notices, csv_path="resources/notice_records.csv"):
-        """
-        对传入的Notice列表进行去重，依据csv中的记录进行去重，并更新csv内容，返回去重后的Notice列表。
-        csv只存储url和hash值。忽略空行，写入时去除潜在空行。
-        """
-        csv_path = Path(__file__).parent.parent.parent.joinpath(csv_path)
-        print(f"CSV Path: {csv_path}")
-        abs_csv_path = os.path.abspath(csv_path)
-        existing_records = []
-        existing_hashes = set()
-        # 读取已存在的记录，忽略空行
-        if os.path.exists(abs_csv_path):
-            with open(abs_csv_path, "r", encoding="utf-8", newline="") as f:
-                reader = csv.reader(f)
-                for row in reader:
-                    if row and len(row) >= 2 and row[0] and row[1]:
-                        existing_records.append((row[0], row[1]))
-                        existing_hashes.add(row[1])
-
-        def notice_hash(x: Notice):
-            import hashlib
-            h = hashlib.sha256()
-            h.update((x.url or "").encode("utf-8"))
-            h.update((x.title or "").encode("utf-8"))
-            return h.hexdigest()
-
-        deduped = []
-        new_records = []
-        for notice in notices:
-            h = notice_hash(notice)
-            if h not in existing_hashes:
-                deduped.append(notice)
-                new_records.append((notice.url, h))
-
-        # 更新csv，去除潜在空行，只保留有效记录+新记录
-        all_records = existing_records + new_records
-        if new_records or (os.path.exists(abs_csv_path) and len(existing_records) != sum(
-                1 for _ in open(abs_csv_path, encoding="utf-8"))):
-            os.makedirs(os.path.dirname(abs_csv_path), exist_ok=True)
-            with open(abs_csv_path, "w", encoding="utf-8", newline="") as f:
-                writer = csv.writer(f)
-                for rec in all_records:
-                    if rec[0] and rec[1]:
-                        writer.writerow(rec)
-
-        return deduped
+    def dedup_and_save_to_csv(cls, notices: Iterable[Notice], csv_path: str | Path | None = None) -> list[Notice]:
+        notices = list(notices)
+        if csv_path is None:
+            return cls._dedup_with_sqlite(notices)
+        return cls._dedup_with_explicit_csv(notices, csv_path)
 
     @classmethod
     def get_notice_list(cls) -> list[Notice]:
-        """
-        获取通知公告列表
-        """
-        notices = cls.fetch_notice_list()
-        deduped_notices = cls.dedup_and_save_to_csv(notices)
-        return deduped_notices
+        return cls.dedup_and_save_to_csv(cls.fetch_notice_list())
+
+    @classmethod
+    def _dedup_with_sqlite(cls, notices: list[Notice]) -> list[Notice]:
+        config = load_config(env={})
+        storage = NoticeStorage(config.state_path, config.sources)
+        storage.initialize()
+        storage.migrate_legacy_csv(config.repo_root / "resources" / "notice_records.csv")
+
+        items = [_item_from_notice(notice) for notice in notices]
+        new_items = storage.filter_new_items(items)
+        for item in new_items:
+            storage.upsert_seen_item(item)
+        new_urls = {item.url for item in new_items}
+        return [notice for notice in notices if notice.url in new_urls]
+
+    @classmethod
+    def _dedup_with_explicit_csv(cls, notices: list[Notice], csv_path: str | Path) -> list[Notice]:
+        config = load_config(env={})
+        path = Path(csv_path)
+        if not path.is_absolute():
+            path = config.repo_root / path
+
+        existing_records: list[tuple[str, str]] = []
+        existing_hashes: set[str] = set()
+        if path.exists():
+            with path.open("r", encoding="utf-8", newline="") as file:
+                for row in csv.reader(file):
+                    if len(row) >= 2 and row[0] and row[1]:
+                        existing_records.append((row[0], row[1]))
+                        existing_hashes.add(row[1])
+
+        deduped: list[Notice] = []
+        new_records: list[tuple[str, str]] = []
+        for notice in notices:
+            digest = _notice_hash(notice)
+            if digest in existing_hashes:
+                continue
+            deduped.append(notice)
+            new_records.append((notice.url, digest))
+            existing_hashes.add(digest)
+
+        if new_records:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("w", encoding="utf-8", newline="") as file:
+                writer = csv.writer(file)
+                writer.writerows(existing_records + new_records)
+
+        return deduped
+
+
+def _notice_from_item(item: NoticeListItem) -> Notice:
+    return Notice(
+        url=item.url,
+        title=item.title,
+        upload_time=item.published_at.date() if item.published_at else None,
+    )
+
+
+def _item_from_notice(notice: Notice) -> NoticeListItem:
+    published_at = datetime.combine(notice.upload_time, datetime.min.time()) if notice.upload_time else None
+    return NoticeListItem(
+        source_id="shu_official",
+        url=notice.url,
+        canonical_url=notice.url,
+        title=notice.title or "",
+        published_at=published_at,
+    )
+
+
+def _notice_hash(notice: Notice) -> str:
+    digest = hashlib.sha256()
+    digest.update((notice.url or "").encode("utf-8"))
+    digest.update((notice.title or "").encode("utf-8"))
+    return digest.hexdigest()

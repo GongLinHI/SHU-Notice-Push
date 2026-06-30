@@ -1,0 +1,1 @@
+"""Notice source adapters."""
