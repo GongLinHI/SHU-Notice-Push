@@ -10,6 +10,66 @@ import yaml
 from src.notice_push.models import AppConfig, NoticeRuntimeProfile, NoticeSource
 
 
+PROFILE_DEFAULTS: dict[str, dict[str, Any]] = {
+    "daily": {
+        "max_pages_per_source": 5,
+        "stop_after_seen_pages": 2,
+        "detail_max_workers": 2,
+        "summary_max_workers": 3,
+        "http_timeout": 12,
+        "http_max_retries": 2,
+        "http_initial_retry_delay": 0.8,
+        "lookback_days": 365,
+        "retry_failed": True,
+        "failed_retry_limit": 3,
+        "failed_retry_after_hours": 12,
+        "refresh_seen_details": False,
+        "refresh_seen_max_workers": 1,
+        "refresh_seen_limit": 0,
+        "llm_timeout": 60,
+        "llm_max_retries": 3,
+        "llm_initial_retry_delay": 1.0,
+        "llm_retry_backoff": 2.0,
+    },
+    "backfill": {
+        "max_pages_per_source": None,
+        "stop_after_seen_pages": None,
+        "detail_max_workers": 4,
+        "summary_max_workers": 3,
+        "http_timeout": 20,
+        "http_max_retries": 3,
+        "http_initial_retry_delay": 1.0,
+        "lookback_days": 365,
+        "retry_failed": True,
+        "failed_retry_limit": 3,
+        "failed_retry_after_hours": 6,
+        "refresh_seen_details": True,
+        "refresh_seen_max_workers": 2,
+        "refresh_seen_limit": 200,
+        "llm_timeout": 90,
+        "llm_max_retries": 3,
+        "llm_initial_retry_delay": 1.0,
+        "llm_retry_backoff": 2.0,
+    },
+}
+
+OPTIONAL_INT_PROFILE_KEYS = {"max_pages_per_source", "stop_after_seen_pages", "lookback_days"}
+INT_PROFILE_KEYS = {
+    "detail_max_workers",
+    "summary_max_workers",
+    "http_timeout",
+    "http_max_retries",
+    "failed_retry_limit",
+    "failed_retry_after_hours",
+    "refresh_seen_max_workers",
+    "refresh_seen_limit",
+    "llm_timeout",
+    "llm_max_retries",
+}
+FLOAT_PROFILE_KEYS = {"http_initial_retry_delay", "llm_initial_retry_delay", "llm_retry_backoff"}
+BOOL_PROFILE_KEYS = {"retry_failed", "refresh_seen_details"}
+
+
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
@@ -33,39 +93,38 @@ def _yaml_value(data: Mapping[str, Any], *path: str, default=None):
     return current
 
 
-def _as_int(env: Mapping[str, str], name: str, default: int) -> int:
-    raw = env.get(name)
+def _int_value(raw, default: int) -> int:
     if raw is None or raw == "":
         return default
     return int(raw)
 
 
-def _as_optional_int(env: Mapping[str, str], name: str, default: Optional[int]) -> Optional[int]:
-    raw = env.get(name)
+def _optional_int_value(raw, default: Optional[int]) -> Optional[int]:
     if raw is None or raw == "":
-        return default
+        if default is None or default == "":
+            return None
+        value = int(default)
+        return None if value <= 0 else value
     value = int(raw)
     return None if value <= 0 else value
 
 
-def _as_float(env: Mapping[str, str], name: str, default: float) -> float:
-    raw = env.get(name)
+def _float_value(raw, default: float) -> float:
     if raw is None or raw == "":
         return default
     return float(raw)
 
 
-def _as_bool(env: Mapping[str, str], name: str, default: bool = True) -> bool:
-    raw = env.get(name)
+def _bool_value(raw, default: bool = True) -> bool:
     if raw is None or raw == "":
         return default
-    return raw.strip().lower() not in {"0", "false", "no", "off"}
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
 
 
-def _source_enabled(env: Mapping[str, str], yaml_config: Mapping[str, Any], source_key: str) -> bool:
-    default = bool(_yaml_value(yaml_config, "sources", source_key, "enabled", default=True))
-    env_name = f"SOURCE_{source_key.upper()}_ENABLED"
-    return _as_bool(env, env_name, default)
+def _source_enabled(yaml_config: Mapping[str, Any], source_key: str) -> bool:
+    return _bool_value(_yaml_value(yaml_config, "sources", source_key, "enabled", default=True), True)
 
 
 def _built_in_source_defaults() -> dict[str, dict[str, str]]:
@@ -74,19 +133,19 @@ def _built_in_source_defaults() -> dict[str, dict[str, str]]:
             "name": "上海大学官网",
             "base_url": "https://www.shu.edu.cn/",
             "list_url": "https://www.shu.edu.cn/tzgg.htm",
-            "adapter": "shu_official",
+            "adapter": "src.notice_push.sources.shu_official.ShuOfficialAdapter",
         },
         "management_school": {
             "name": "上海大学管理学院",
             "base_url": "https://ms.shu.edu.cn/",
             "list_url": "https://ms.shu.edu.cn/syzl/zytz.htm",
-            "adapter": "management_school",
+            "adapter": "src.notice_push.sources.management_school.ManagementSchoolAdapter",
         },
         "graduate_school": {
             "name": "上海大学研究生院",
             "base_url": "https://gs.shu.edu.cn/",
             "list_url": "https://gs.shu.edu.cn/xwlb/sy.htm",
-            "adapter": "graduate_school",
+            "adapter": "src.notice_push.sources.graduate_school.GraduateSchoolAdapter",
         },
     }
 
@@ -106,7 +165,7 @@ def _source_value(
         raise ValueError(f"Source '{source_id}' must define '{key}' in runtime.yml") from exc
 
 
-def _default_sources(env: Mapping[str, str], yaml_config: Mapping[str, Any]) -> tuple[NoticeSource, ...]:
+def _default_sources(yaml_config: Mapping[str, Any]) -> tuple[NoticeSource, ...]:
     defaults = _built_in_source_defaults()
     yaml_sources = _yaml_value(yaml_config, "sources", default={})
     if yaml_sources is None:
@@ -129,91 +188,36 @@ def _default_sources(env: Mapping[str, str], yaml_config: Mapping[str, Any]) -> 
                 base_url=_source_value(source_id, source_config, defaults, "base_url"),
                 list_url=_source_value(source_id, source_config, defaults, "list_url"),
                 adapter=_source_value(source_id, source_config, defaults, "adapter"),
-                enabled=_source_enabled(env, yaml_config, source_id),
+                enabled=_source_enabled(yaml_config, source_id),
             )
         )
     return tuple(sources)
 
 
-def _runtime_profiles(env: Mapping[str, str], yaml_config: Mapping[str, Any]) -> dict[str, NoticeRuntimeProfile]:
-    return {
-        "daily": NoticeRuntimeProfile(
-            name="daily",
-            max_pages_per_source=_as_optional_int(
-                env,
-                "DAILY_MAX_PAGES_PER_SOURCE",
-                _yaml_value(yaml_config, "profiles", "daily", "max_pages_per_source", default=5),
-            ),
-            stop_after_seen_pages=_as_optional_int(
-                env,
-                "DAILY_STOP_AFTER_SEEN_PAGES",
-                _yaml_value(yaml_config, "profiles", "daily", "stop_after_seen_pages", default=2),
-            ),
-            detail_max_workers=_as_int(
-                env,
-                "DAILY_DETAIL_MAX_WORKERS",
-                int(_yaml_value(yaml_config, "profiles", "daily", "detail_max_workers", default=2)),
-            ),
-            summary_max_workers=_as_int(
-                env,
-                "DAILY_SUMMARY_MAX_WORKERS",
-                int(_yaml_value(yaml_config, "profiles", "daily", "summary_max_workers", default=3)),
-            ),
-            http_timeout=_as_int(
-                env,
-                "DAILY_HTTP_TIMEOUT",
-                int(_yaml_value(yaml_config, "profiles", "daily", "http_timeout", default=12)),
-            ),
-            http_max_retries=_as_int(
-                env,
-                "DAILY_HTTP_MAX_RETRIES",
-                int(_yaml_value(yaml_config, "profiles", "daily", "http_max_retries", default=2)),
-            ),
-            http_initial_retry_delay=_as_float(
-                env,
-                "DAILY_HTTP_INITIAL_RETRY_DELAY",
-                float(_yaml_value(yaml_config, "profiles", "daily", "http_initial_retry_delay", default=0.8)),
-            ),
-        ),
-        "backfill": NoticeRuntimeProfile(
-            name="backfill",
-            max_pages_per_source=_as_optional_int(
-                env,
-                "BACKFILL_MAX_PAGES_PER_SOURCE",
-                _yaml_value(yaml_config, "profiles", "backfill", "max_pages_per_source", default=None),
-            ),
-            stop_after_seen_pages=_as_optional_int(
-                env,
-                "BACKFILL_STOP_AFTER_SEEN_PAGES",
-                _yaml_value(yaml_config, "profiles", "backfill", "stop_after_seen_pages", default=None),
-            ),
-            detail_max_workers=_as_int(
-                env,
-                "BACKFILL_DETAIL_MAX_WORKERS",
-                int(_yaml_value(yaml_config, "profiles", "backfill", "detail_max_workers", default=4)),
-            ),
-            summary_max_workers=_as_int(
-                env,
-                "BACKFILL_SUMMARY_MAX_WORKERS",
-                int(_yaml_value(yaml_config, "profiles", "backfill", "summary_max_workers", default=3)),
-            ),
-            http_timeout=_as_int(
-                env,
-                "BACKFILL_HTTP_TIMEOUT",
-                int(_yaml_value(yaml_config, "profiles", "backfill", "http_timeout", default=20)),
-            ),
-            http_max_retries=_as_int(
-                env,
-                "BACKFILL_HTTP_MAX_RETRIES",
-                int(_yaml_value(yaml_config, "profiles", "backfill", "http_max_retries", default=3)),
-            ),
-            http_initial_retry_delay=_as_float(
-                env,
-                "BACKFILL_HTTP_INITIAL_RETRY_DELAY",
-                float(_yaml_value(yaml_config, "profiles", "backfill", "http_initial_retry_delay", default=1.0)),
-            ),
-        ),
-    }
+def _runtime_profiles(yaml_config: Mapping[str, Any]) -> dict[str, NoticeRuntimeProfile]:
+    return {name: _runtime_profile(name, defaults, yaml_config) for name, defaults in PROFILE_DEFAULTS.items()}
+
+
+def _runtime_profile(
+    name: str,
+    defaults: Mapping[str, Any],
+    yaml_config: Mapping[str, Any],
+) -> NoticeRuntimeProfile:
+    values = {key: _profile_value(yaml_config, name, key, default) for key, default in defaults.items()}
+    return NoticeRuntimeProfile(name=name, **values)
+
+
+def _profile_value(yaml_config: Mapping[str, Any], profile_name: str, key: str, default):
+    raw = _yaml_value(yaml_config, "profiles", profile_name, key, default=default)
+    if key in OPTIONAL_INT_PROFILE_KEYS:
+        return _optional_int_value(raw, default)
+    if key in INT_PROFILE_KEYS:
+        return _int_value(raw, int(default))
+    if key in FLOAT_PROFILE_KEYS:
+        return _float_value(raw, float(default))
+    if key in BOOL_PROFILE_KEYS:
+        return _bool_value(raw, bool(default))
+    return raw
 
 
 def load_config(
@@ -236,12 +240,12 @@ def load_config(
         repo_root=root,
         state_path=Path(resolved_state_path),
         output_dir=Path(resolved_output_dir),
-        prompt_name=env.get("PROMPT_NAME", str(_yaml_value(yaml_config, "prompt_name", default="notice_summary_v1"))),
-        deepseek_model=env.get("DEEPSEEK_MODEL", str(_yaml_value(yaml_config, "deepseek_model", default="deepseek-chat"))),
-        summary_max_workers=_as_int(env, "SUMMARY_MAX_WORKERS", int(_yaml_value(yaml_config, "summary_max_workers", default=5))),
-        max_pages_per_source=_as_int(env, "MAX_PAGES_PER_SOURCE", int(_yaml_value(yaml_config, "max_pages_per_source", default=3))),
-        stop_after_seen_pages=_as_int(env, "STOP_AFTER_SEEN_PAGES", int(_yaml_value(yaml_config, "stop_after_seen_pages", default=2))),
-        detail_min_chars=_as_int(env, "DETAIL_MIN_CHARS", int(_yaml_value(yaml_config, "detail_min_chars", default=30))),
-        runtime_profiles=_runtime_profiles(env, yaml_config),
-        sources=_default_sources(env, yaml_config),
+        prompt_name=str(_yaml_value(yaml_config, "prompt_name", default="notice_summary_v1")),
+        deepseek_model=env.get(
+            "DEEPSEEK_MODEL",
+            str(_yaml_value(yaml_config, "deepseek_model", default="deepseek-v4-flash")),
+        ),
+        detail_min_chars=int(_yaml_value(yaml_config, "detail_min_chars", default=30)),
+        runtime_profiles=_runtime_profiles(yaml_config),
+        sources=_default_sources(yaml_config),
     )

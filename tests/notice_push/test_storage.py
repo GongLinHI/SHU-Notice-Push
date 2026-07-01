@@ -81,7 +81,7 @@ def test_storage_saves_detail_summary_and_failure(tmp_path):
             generated_at=datetime(2026, 6, 16, 8, 0),
         ),
     )
-    storage.mark_failed(notice_id, "detail too short")
+    storage.mark_failed(notice_id, "detail too short", failure_type="detail_empty", retry_after_hours=0, retry_limit=3)
 
     row = storage.get_notice(notice_id)
 
@@ -91,6 +91,24 @@ def test_storage_saves_detail_summary_and_failure(tmp_path):
     assert row["summary_prompt_version"] == "notice_summary_v1"
     assert row["status"] == "failed"
     assert row["error_message"] == "detail too short"
+    assert row["failure_type"] == "detail_empty"
+    assert row["failure_count"] == 1
+    assert row["next_retry_at"] is not None
+
+
+def test_storage_returns_retryable_failed_items_until_retry_limit(tmp_path):
+    config = load_config(env={}, repo_root=tmp_path)
+    storage = NoticeStorage(tmp_path / "state.sqlite3", config.sources)
+    storage.initialize()
+    item = make_item("shu_official", "https://example.com/retry.htm")
+    notice_id = storage.upsert_seen_item(item)
+    storage.mark_failed(notice_id, "temporary empty detail", failure_type="detail_empty", retry_after_hours=0, retry_limit=2)
+
+    assert storage.filter_processable_items([item], retry_failed=True, failed_retry_limit=2) == [item]
+
+    storage.mark_failed(notice_id, "temporary empty detail again", failure_type="detail_empty", retry_after_hours=0, retry_limit=2)
+
+    assert storage.filter_processable_items([item], retry_failed=True, failed_retry_limit=2) == []
 
 
 def test_storage_updates_changed_seen_detail_without_resending(tmp_path):
@@ -135,6 +153,104 @@ def test_storage_updates_changed_seen_detail_without_resending(tmp_path):
     assert after["summary"] == ""
 
 
+def test_storage_clears_failure_metadata_when_seen_detail_is_updated(tmp_path):
+    config = load_config(env={}, repo_root=tmp_path)
+    storage = NoticeStorage(tmp_path / "state.sqlite3", config.sources)
+    storage.initialize()
+    item = make_item("shu_official", "https://example.com/detail.htm")
+    notice_id = storage.upsert_seen_item(item)
+    storage.save_detail(
+        notice_id,
+        NoticeDetail(
+            source_id=item.source_id,
+            url=item.url,
+            canonical_url=item.canonical_url,
+            title=item.title,
+            content="旧详情正文",
+            published_at=item.published_at,
+            list_excerpt=item.list_excerpt,
+        ),
+    )
+    storage.mark_failed(notice_id, "temporary failure", failure_type="detail_empty", retry_after_hours=1, retry_limit=3)
+
+    storage.update_seen_detail_if_changed(
+        notice_id,
+        NoticeDetail(
+            source_id=item.source_id,
+            url=item.url,
+            canonical_url=item.canonical_url,
+            title=item.title,
+            content="这是一段足够长的新详情正文，用于清理失败重试元数据。",
+            published_at=item.published_at,
+            list_excerpt=item.list_excerpt,
+        ),
+    )
+
+    row = storage.get_notice(notice_id)
+    assert row["status"] == "updated_seen"
+    assert row["error_message"] == ""
+    assert row["failure_type"] == ""
+    assert row["failure_count"] == 0
+    assert row["last_failed_at"] is None
+    assert row["next_retry_at"] is None
+
+
+def test_storage_save_detail_keeps_summary_failure_retry_state(tmp_path):
+    config = load_config(env={}, repo_root=tmp_path)
+    storage = NoticeStorage(tmp_path / "state.sqlite3", config.sources)
+    storage.initialize()
+    item = make_item("shu_official", "https://example.com/detail.htm")
+    notice_id = storage.upsert_seen_item(item)
+    storage.mark_failed(notice_id, "rate limited", failure_type="llm_rate_limit", retry_after_hours=0, retry_limit=3)
+
+    storage.save_detail(
+        notice_id,
+        NoticeDetail(
+            source_id=item.source_id,
+            url=item.url,
+            canonical_url=item.canonical_url,
+            title=item.title,
+            content="这是一段足够长的详情正文，准备再次提交给摘要模型。",
+            published_at=item.published_at,
+            list_excerpt=item.list_excerpt,
+        ),
+    )
+
+    row = storage.get_notice(notice_id)
+    assert row["status"] == "failed"
+    assert row["failure_type"] == "llm_rate_limit"
+    assert row["failure_count"] == 1
+    assert row["next_retry_at"] is not None
+
+
+def test_storage_save_detail_clears_generic_detail_failure_state(tmp_path):
+    config = load_config(env={}, repo_root=tmp_path)
+    storage = NoticeStorage(tmp_path / "state.sqlite3", config.sources)
+    storage.initialize()
+    item = make_item("shu_official", "https://example.com/detail.htm")
+    notice_id = storage.upsert_seen_item(item)
+    storage.mark_failed(notice_id, "connection reset", failure_type="detail_RuntimeError", retry_after_hours=0, retry_limit=3)
+
+    storage.save_detail(
+        notice_id,
+        NoticeDetail(
+            source_id=item.source_id,
+            url=item.url,
+            canonical_url=item.canonical_url,
+            title=item.title,
+            content="这是一段足够长的详情正文，说明详情阶段已经恢复。",
+            published_at=item.published_at,
+            list_excerpt=item.list_excerpt,
+        ),
+    )
+
+    row = storage.get_notice(notice_id)
+    assert row["status"] == "detailed"
+    assert row["failure_type"] == ""
+    assert row["failure_count"] == 0
+    assert row["next_retry_at"] is None
+
+
 def test_storage_migrates_legacy_csv_and_bootstrap_baseline(tmp_path):
     config = load_config(env={}, repo_root=tmp_path)
     csv_path = tmp_path / "notice_records.csv"
@@ -167,3 +283,42 @@ def test_storage_uses_temporary_database_only(tmp_path):
     assert db_path.exists()
     with sqlite3.connect(db_path) as conn:
         assert conn.execute("select count(*) from sources").fetchone()[0] == 3
+
+
+def test_storage_migrates_existing_database_with_retry_columns(tmp_path):
+    config = load_config(env={}, repo_root=tmp_path)
+    db_path = tmp_path / "state.sqlite3"
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            create table notices (
+                id integer primary key autoincrement,
+                source_id text not null,
+                url text not null,
+                canonical_url text not null,
+                title text not null,
+                list_excerpt text not null default '',
+                content text not null default '',
+                published_at text,
+                first_seen_at text not null,
+                last_seen_at text not null,
+                content_hash text not null default '',
+                status text not null,
+                summary text not null default '',
+                summary_model text not null default '',
+                summary_prompt_version text not null default '',
+                summary_generated_at text,
+                detail_fetched_at text,
+                error_message text not null default '',
+                unique(source_id, canonical_url)
+            );
+            """
+        )
+
+    storage = NoticeStorage(db_path, config.sources)
+    storage.initialize()
+
+    with sqlite3.connect(db_path) as conn:
+        columns = {row[1] for row in conn.execute("pragma table_info(notices)").fetchall()}
+
+    assert {"failure_type", "failure_count", "last_failed_at", "next_retry_at"} <= columns

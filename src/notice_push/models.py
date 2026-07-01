@@ -90,6 +90,17 @@ class NoticeRuntimeProfile:
     http_timeout: int
     http_max_retries: int
     http_initial_retry_delay: float
+    lookback_days: Optional[int]
+    retry_failed: bool
+    failed_retry_limit: int
+    failed_retry_after_hours: int
+    refresh_seen_details: bool
+    refresh_seen_max_workers: int
+    refresh_seen_limit: int
+    llm_timeout: int
+    llm_max_retries: int
+    llm_initial_retry_delay: float
+    llm_retry_backoff: float
 
 
 @dataclass(frozen=True)
@@ -99,9 +110,6 @@ class AppConfig:
     output_dir: Path
     prompt_name: str
     deepseek_model: str
-    summary_max_workers: int
-    max_pages_per_source: int
-    stop_after_seen_pages: int
     detail_min_chars: int
     runtime_profiles: dict[str, NoticeRuntimeProfile]
     sources: tuple[NoticeSource, ...]

@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from src.notice_push.models import NoticeListItem
 from src.notice_push.config import load_config
 from src.notice_push.sources.graduate_school import GraduateSchoolAdapter
 from src.notice_push.sources.management_school import ManagementSchoolAdapter
@@ -61,3 +62,39 @@ def test_graduate_school_adapter_parses_row_list_next_page_detail_and_attachment
     assert "国家教学成果奖参评资格" in detail.content
     assert detail.attachments[0].name == "附件【2026年上海大学高等教育（研究生）国家教学成果奖.pdf】"
     assert detail.attachments[0].url == "https://gs.shu.edu.cn/__local/1/2026.pdf"
+
+
+def test_source_adapters_fallback_to_generic_article_content(tmp_path):
+    config = load_config(env={}, repo_root=tmp_path)
+    html = """
+    <html>
+      <body>
+        <main>
+          <h1>备用正文容器通知</h1>
+          <article>
+            <p>这是来自通用 article 容器的第一段正文。</p>
+            <p>这是来自通用 article 容器的第二段正文。</p>
+          </article>
+        </main>
+      </body>
+    </html>
+    """
+    adapters = [
+        ShuOfficialAdapter(config.source_by_id("shu_official")),
+        ManagementSchoolAdapter(config.source_by_id("management_school")),
+        GraduateSchoolAdapter(config.source_by_id("graduate_school")),
+    ]
+
+    for adapter in adapters:
+        source = adapter.source
+        detail = adapter.parse_detail(
+            html,
+            NoticeListItem(
+                source_id=source.id,
+                url=source.list_url,
+                canonical_url=source.list_url,
+                title="备用正文容器通知",
+            ),
+        )
+        assert "通用 article 容器的第一段正文" in detail.content
+        assert "通用 article 容器的第二段正文" in detail.content

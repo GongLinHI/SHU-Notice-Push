@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -28,20 +29,27 @@ class NoticeSummarizer:
         model: str,
         api_key: Optional[str] = None,
         client=None,
+        timeout: int = 60,
         max_retries: int = 2,
+        initial_retry_delay: float = 0.5,
+        retry_backoff: float = 2.0,
     ):
         self.prompt_dir = Path(prompt_dir)
         self.prompt_name = prompt_name
         self.model = model
         self.api_key = api_key
         self._client = client
+        self.timeout = timeout
         self.max_retries = max(1, max_retries)
+        self.initial_retry_delay = max(0.0, initial_retry_delay)
+        self.retry_backoff = max(1.0, retry_backoff)
+        self._system_prompt: Optional[str] = None
 
     def summarize(self, notice_id: int, detail: NoticeDetail, source_name: Optional[str] = None) -> NoticeSummary:
         if not detail.content.strip():
             raise ValueError("detail content is required for summarization")
 
-        system_prompt = load_prompt(self.prompt_dir, self.prompt_name)
+        system_prompt = self._get_system_prompt()
         user_prompt = self.render_user_prompt(detail, source_name=source_name)
         content = self._chat(system_prompt, user_prompt)
 
@@ -68,7 +76,7 @@ class NoticeSummarizer:
 
     def _chat(self, system_prompt: str, user_prompt: str) -> str:
         last_error: Optional[Exception] = None
-        for _ in range(self.max_retries):
+        for attempt in range(self.max_retries):
             try:
                 response = self._get_client().chat.completions.create(
                     model=self.model,
@@ -77,11 +85,25 @@ class NoticeSummarizer:
                         {"role": "user", "content": user_prompt},
                     ],
                     stream=False,
+                    timeout=self.timeout,
                 )
-                return response.choices[0].message.content
+                content = response.choices[0].message.content
+                if not content or not content.strip():
+                    raise ValueError("empty summary response from model")
+                return content
             except Exception as exc:
                 last_error = exc
+                if attempt + 1 >= self.max_retries:
+                    break
+                retry_delay = self.initial_retry_delay * (self.retry_backoff**attempt)
+                if retry_delay:
+                    time.sleep(retry_delay)
         raise last_error  # type: ignore[misc]
+
+    def _get_system_prompt(self) -> str:
+        if self._system_prompt is None:
+            self._system_prompt = load_prompt(self.prompt_dir, self.prompt_name)
+        return self._system_prompt
 
     def _get_client(self):
         if self._client is not None:

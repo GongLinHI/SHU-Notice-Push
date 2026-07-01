@@ -33,6 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stop-after-seen-pages", type=int, default=None, help="Stop after N pages with no new notices.")
     parser.add_argument("--detail-max-workers", type=int, default=None, help="Maximum concurrent detail page fetches.")
     parser.add_argument("--summary-max-workers", type=int, default=None, help="Maximum concurrent summary generation tasks.")
+    parser.add_argument("--lookback-days", type=int, default=None, help="Only process notices within the last N days.")
     return parser
 
 
@@ -47,6 +48,10 @@ def build_pipeline(config, profile: NoticeRuntimeProfile) -> NoticePipeline:
         prompt_dir=config.repo_root / "resources" / "prompts",
         prompt_name=config.prompt_name,
         model=config.deepseek_model,
+        timeout=profile.llm_timeout,
+        max_retries=profile.llm_max_retries,
+        initial_retry_delay=profile.llm_initial_retry_delay,
+        retry_backoff=profile.llm_retry_backoff,
     )
     return NoticePipeline(
         config=config,
@@ -57,15 +62,27 @@ def build_pipeline(config, profile: NoticeRuntimeProfile) -> NoticePipeline:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
     config = load_config(state_path=args.state_path, output_dir=args.output_dir)
     profile = config.runtime_profile(args.profile)
+    if args.sources:
+        available_sources = {source.id for source in config.sources}
+        missing_sources = sorted(set(args.sources) - available_sources)
+        if missing_sources:
+            parser.error(
+                "unknown source id(s): "
+                + ", ".join(missing_sources)
+                + ". Available sources: "
+                + ", ".join(sorted(available_sources))
+            )
     pipeline = build_pipeline(config, profile)
     report_date = date.fromisoformat(args.report_date) if args.report_date else None
     max_pages_per_source = args.max_pages_per_source
     stop_after_seen_pages = args.stop_after_seen_pages
     detail_max_workers = args.detail_max_workers
     summary_max_workers = args.summary_max_workers
+    lookback_days = args.lookback_days
 
     if max_pages_per_source is None:
         max_pages_per_source = profile.max_pages_per_source
@@ -75,6 +92,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         detail_max_workers = profile.detail_max_workers
     if summary_max_workers is None:
         summary_max_workers = profile.summary_max_workers
+    if lookback_days is None:
+        lookback_days = profile.lookback_days
 
     result = pipeline.run(
         source_ids=args.sources,
@@ -85,6 +104,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         stop_after_seen_pages=stop_after_seen_pages,
         detail_max_workers=detail_max_workers,
         summary_max_workers=summary_max_workers,
+        lookback_days=lookback_days,
+        retry_failed=profile.retry_failed,
+        failed_retry_limit=profile.failed_retry_limit,
+        failed_retry_after_hours=profile.failed_retry_after_hours,
+        refresh_seen_details=profile.refresh_seen_details,
+        refresh_seen_max_workers=profile.refresh_seen_max_workers,
+        refresh_seen_limit=profile.refresh_seen_limit,
         bootstrap_seen=args.bootstrap_seen,
     )
 

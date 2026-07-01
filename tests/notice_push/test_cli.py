@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from src.notice_push.__main__ import main
 from src.notice_push.models import PipelineResult
 
@@ -53,6 +55,7 @@ def test_cli_passes_runtime_flags_and_dry_run_returns_success(monkeypatch, tmp_p
     assert fake_pipeline.last_kwargs["report_date"].isoformat() == "2026-06-30"
     assert fake_pipeline.last_kwargs["max_pages_per_source"] == 2
     assert fake_pipeline.last_kwargs["stop_after_seen_pages"] == 1
+    assert fake_pipeline.last_kwargs["lookback_days"] == 365
 
 
 def test_cli_applies_daily_profile_defaults(monkeypatch):
@@ -73,6 +76,10 @@ def test_cli_applies_daily_profile_defaults(monkeypatch):
     assert fake_pipeline.last_kwargs["stop_after_seen_pages"] == 2
     assert fake_pipeline.last_kwargs["detail_max_workers"] == 2
     assert fake_pipeline.last_kwargs["summary_max_workers"] == 3
+    assert fake_pipeline.last_kwargs["lookback_days"] == 365
+    assert fake_pipeline.last_kwargs["retry_failed"] is True
+    assert fake_pipeline.last_kwargs["failed_retry_limit"] == 3
+    assert fake_pipeline.last_kwargs["refresh_seen_details"] is False
     assert captured["config"].runtime_profiles["daily"].http_timeout == 12
     assert captured["config"].runtime_profiles["daily"].http_max_retries == 2
     assert captured["config"].runtime_profiles["daily"].http_initial_retry_delay == 0.8
@@ -90,6 +97,8 @@ def test_cli_applies_backfill_profile_defaults(monkeypatch):
     assert fake_pipeline.last_kwargs["stop_after_seen_pages"] is None
     assert fake_pipeline.last_kwargs["detail_max_workers"] == 4
     assert fake_pipeline.last_kwargs["summary_max_workers"] == 3
+    assert fake_pipeline.last_kwargs["lookback_days"] == 365
+    assert fake_pipeline.last_kwargs["refresh_seen_details"] is True
 
 
 def test_cli_prefers_explicit_runtime_flags_over_profile(monkeypatch):
@@ -118,6 +127,17 @@ def test_cli_prefers_explicit_runtime_flags_over_profile(monkeypatch):
     assert fake_pipeline.last_kwargs["stop_after_seen_pages"] == 4
     assert fake_pipeline.last_kwargs["detail_max_workers"] == 6
     assert fake_pipeline.last_kwargs["summary_max_workers"] == 7
+
+
+def test_cli_rejects_unknown_source_before_running_pipeline(monkeypatch):
+    fake_pipeline = FakePipeline()
+    monkeypatch.setattr("src.notice_push.__main__.build_pipeline", lambda config, profile: fake_pipeline)
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--dry-run", "--source", "missing_source"])
+
+    assert exc_info.value.code == 2
+    assert fake_pipeline.last_kwargs is None
 
 
 def test_cli_returns_one_when_normal_run_has_no_new_notices(monkeypatch):

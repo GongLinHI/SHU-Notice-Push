@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from bs4 import BeautifulSoup, Tag
 
-from src.notice_push.html_utils import absolute_url, clean_text, extract_text_blocks, parse_date
+from src.notice_push.html_utils import absolute_url, clean_text, extract_text_blocks, parse_date, select_main_content
 from src.notice_push.models import Attachment, NoticeDetail, NoticeListItem
 from src.notice_push.sources.base import NoticeSourceAdapter
 
@@ -33,7 +33,7 @@ class GraduateSchoolAdapter(NoticeSourceAdapter):
 
     def parse_detail(self, html: str, item: NoticeListItem) -> NoticeDetail:
         soup = BeautifulSoup(html, "html.parser")
-        content_node = soup.select_one("#vsb_content .v_news_content") or soup.select_one(".v_news_content")
+        content_node = select_main_content(soup, ["#vsb_content .v_news_content", ".v_news_content"])
         body_text = clean_text(soup.get_text(" ", strip=True))
         content = extract_text_blocks(content_node) if content_node else ""
         attachments = self._extract_attachments(content_node, item.url) if content_node else ()

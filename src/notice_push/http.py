@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import threading
 import time
 
 import requests
@@ -14,13 +15,16 @@ class HttpClient:
     def __init__(
         self,
         session=None,
+        session_factory=None,
         timeout: int = 15,
         user_agent: str = "SHU-Notice-Push/2.0",
         max_retries: int = 2,
         initial_retry_delay: float = 0.5,
         retry_backoff: float = 2.0,
     ):
-        self._session = session or requests.Session()
+        self._session = session
+        self._session_factory = session_factory or requests.Session
+        self._thread_local = threading.local()
         self._timeout = timeout
         self._user_agent = user_agent
         self._max_retries = max(1, max_retries)
@@ -31,7 +35,7 @@ class HttpClient:
         last_error: Exception | None = None
         for attempt in range(self._max_retries):
             try:
-                response = self._session.get(
+                response = self._get_session().get(
                     url,
                     timeout=self._timeout,
                     headers={"User-Agent": self._user_agent},
@@ -50,6 +54,15 @@ class HttpClient:
 
         encoding = _choose_encoding(response)
         return response.content.decode(encoding, errors="replace")
+
+    def _get_session(self):
+        if self._session is not None:
+            return self._session
+        session = getattr(self._thread_local, "session", None)
+        if session is None:
+            session = self._session_factory()
+            self._thread_local.session = session
+        return session
 
 
 def _choose_encoding(response) -> str:

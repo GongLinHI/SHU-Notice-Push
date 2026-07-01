@@ -8,6 +8,21 @@ from urllib.parse import urljoin
 from bs4 import Tag
 
 
+GENERIC_CONTENT_SELECTORS = (
+    "#vsb_content .v_news_content",
+    "#vsb_content",
+    ".v_news_content",
+    "main article",
+    "article",
+    "main",
+    ".content",
+    ".article",
+    ".article-content",
+    ".news_content",
+    ".news-content",
+)
+
+
 def absolute_url(href: str, base_url: str) -> str:
     return urljoin(base_url, href.strip())
 
@@ -42,6 +57,18 @@ def extract_text_blocks(root: Tag) -> str:
             blocks.append(text)
 
     return "\n".join(blocks)
+
+
+def select_main_content(soup, selectors: list[str]) -> Tag | None:
+    seen_selectors: set[str] = set()
+    for selector in tuple(selectors) + GENERIC_CONTENT_SELECTORS:
+        if selector in seen_selectors:
+            continue
+        seen_selectors.add(selector)
+        node = soup.select_one(selector)
+        if node is not None and clean_text(node.get_text(" ", strip=True)):
+            return node
+    return None
 
 
 def parse_date(text: str) -> Optional[datetime]:

@@ -65,6 +65,11 @@ class FakeSummarizer:
         )
 
 
+class FailingSummarizer:
+    def summarize(self, notice_id, detail, source_name=None):
+        raise RuntimeError("rate limited")
+
+
 class MultiItemAdapter(FakeAdapter):
     def parse_list_page(self, html, page_url):
         if html == "list-1":
@@ -80,6 +85,64 @@ class MultiItemAdapter(FakeAdapter):
                 for index in range(1, 5)
             ]
         return []
+
+
+class DatedPagingAdapter(FakeAdapter):
+    def parse_list_page(self, html, page_url):
+        if html == "recent":
+            return [
+                NoticeListItem(
+                    source_id=self.source.id,
+                    url="https://example.com/recent.htm",
+                    canonical_url="https://example.com/recent.htm",
+                    title="近一年通知",
+                    published_at=datetime(2026, 6, 1),
+                )
+            ]
+        if html == "old":
+            return [
+                NoticeListItem(
+                    source_id=self.source.id,
+                    url="https://example.com/old.htm",
+                    canonical_url="https://example.com/old.htm",
+                    title="一年以前通知",
+                    published_at=datetime(2024, 12, 31),
+                )
+            ]
+        return []
+
+    def find_next_page_url(self, html, page_url):
+        if html == "recent":
+            return "https://example.com/page-old.htm"
+        return None
+
+
+class FivePageAdapter(FakeAdapter):
+    def parse_list_page(self, html, page_url):
+        if html.startswith("list-"):
+            page_number = int(html.removeprefix("list-"))
+            return [
+                NoticeListItem(
+                    source_id=self.source.id,
+                    url=f"https://example.com/detail-{page_number}.htm",
+                    canonical_url=f"https://example.com/detail-{page_number}.htm",
+                    title=f"测试通知 {page_number}",
+                    published_at=datetime(2026, 6, 16),
+                    list_excerpt="列表摘要",
+                )
+            ]
+        return []
+
+    def find_next_page_url(self, html, page_url):
+        page_number = int(html.removeprefix("list-"))
+        if page_number >= 5:
+            return None
+        return f"https://example.com/page-{page_number + 1}.htm"
+
+
+class LoopingAdapter(FakeAdapter):
+    def find_next_page_url(self, html, page_url):
+        return page_url
 
 
 class RecordingHttp:
@@ -171,6 +234,128 @@ def test_pipeline_run_persists_summary_and_writes_report(tmp_path):
     assert result.report_path == tmp_path / "results" / "2026-06-30.md"
     assert "## 上海大学官网|行政|周常事务|测试通知 1" in result.report_path.read_text(encoding="utf-8")
     assert storage.find_by_source_url("shu_official", "https://example.com/detail-1.htm")["status"] == "summarized"
+
+
+def test_pipeline_retries_failed_notices_when_retry_policy_allows(tmp_path):
+    config = load_config(
+        env={},
+        repo_root=tmp_path,
+        state_path=tmp_path / "state.sqlite3",
+        output_dir=tmp_path / "results",
+    )
+    source = config.source_by_id("shu_official")
+    item = NoticeListItem(
+        source_id=source.id,
+        url="https://example.com/detail-1.htm",
+        canonical_url="https://example.com/detail-1.htm",
+        title="测试通知 1",
+        published_at=datetime(2026, 6, 16),
+        list_excerpt="列表摘要",
+    )
+    storage = NoticeStorage(config.state_path, config.sources)
+    storage.initialize()
+    notice_id = storage.upsert_seen_item(item)
+    storage.mark_failed(notice_id, "temporary detail error", failure_type="detail_empty", retry_after_hours=0, retry_limit=3)
+
+    http = FakeHttp({source.list_url: "list-1", "https://example.com/detail-1.htm": "detail"})
+    summarizer = FakeSummarizer()
+    pipeline = NoticePipeline(
+        config=config,
+        storage=storage,
+        http_client=http,
+        summarizer=summarizer,
+        adapter_factory=lambda selected_source: FakeAdapter(selected_source),
+    )
+
+    result = pipeline.run(
+        source_ids=["shu_official"],
+        dry_run=False,
+        limit=1,
+        max_pages_per_source=1,
+        report_date=date(2026, 6, 30),
+        retry_failed=True,
+        failed_retry_limit=3,
+    )
+
+    assert result.new_count == 1
+    assert result.summarized_count == 1
+    assert storage.find_by_source_url("shu_official", item.canonical_url)["status"] == "summarized"
+
+
+def test_pipeline_preserves_failure_count_across_summary_retries(tmp_path):
+    config = load_config(
+        env={},
+        repo_root=tmp_path,
+        state_path=tmp_path / "state.sqlite3",
+        output_dir=tmp_path / "results",
+    )
+    source = config.source_by_id("shu_official")
+    storage = NoticeStorage(config.state_path, config.sources)
+    pipeline = NoticePipeline(
+        config=config,
+        storage=storage,
+        http_client=FakeHttp({source.list_url: "list-1", "https://example.com/detail-1.htm": "detail"}),
+        summarizer=FailingSummarizer(),
+        adapter_factory=lambda selected_source: FakeAdapter(selected_source),
+    )
+
+    for _ in range(2):
+        pipeline.run(
+            source_ids=["shu_official"],
+            dry_run=False,
+            limit=1,
+            max_pages_per_source=1,
+            report_date=date(2026, 6, 30),
+            retry_failed=True,
+            failed_retry_limit=3,
+            failed_retry_after_hours=0,
+        )
+
+    row = storage.find_by_source_url("shu_official", "https://example.com/detail-1.htm")
+    assert row["status"] == "failed"
+    assert row["failure_type"] == "llm_rate_limit"
+    assert row["failure_count"] == 2
+
+
+def test_pipeline_defaults_to_daily_retry_failed_when_not_explicit(tmp_path):
+    config = load_config(
+        env={},
+        repo_root=tmp_path,
+        state_path=tmp_path / "state.sqlite3",
+        output_dir=tmp_path / "results",
+    )
+    source = config.source_by_id("shu_official")
+    item = NoticeListItem(
+        source_id=source.id,
+        url="https://example.com/detail-1.htm",
+        canonical_url="https://example.com/detail-1.htm",
+        title="测试通知 1",
+        published_at=datetime(2026, 6, 16),
+        list_excerpt="列表摘要",
+    )
+    storage = NoticeStorage(config.state_path, config.sources)
+    storage.initialize()
+    notice_id = storage.upsert_seen_item(item)
+    storage.mark_failed(notice_id, "temporary detail error", failure_type="detail_empty", retry_after_hours=0, retry_limit=3)
+
+    pipeline = NoticePipeline(
+        config=config,
+        storage=storage,
+        http_client=FakeHttp({source.list_url: "list-1", "https://example.com/detail-1.htm": "detail"}),
+        summarizer=FakeSummarizer(),
+        adapter_factory=lambda selected_source: FakeAdapter(selected_source),
+    )
+
+    result = pipeline.run(
+        source_ids=["shu_official"],
+        dry_run=False,
+        limit=1,
+        max_pages_per_source=1,
+        report_date=date(2026, 6, 30),
+    )
+
+    assert result.new_count == 1
+    assert storage.find_by_source_url("shu_official", item.canonical_url)["status"] == "summarized"
 
 
 def test_pipeline_continues_when_one_source_directory_page_fails(tmp_path):
@@ -278,6 +463,151 @@ def test_pipeline_allows_unbounded_page_scan_when_profile_requests_backfill(tmp_
     assert http.requested == [source.list_url, "https://example.com/detail-1.htm", "https://example.com/page-2.htm"]
 
 
+def test_pipeline_defaults_to_daily_profile_when_runtime_limits_are_not_explicit(tmp_path):
+    config = load_config(
+        env={},
+        repo_root=tmp_path,
+        state_path=tmp_path / "state.sqlite3",
+        output_dir=tmp_path / "results",
+    )
+    source = config.source_by_id("shu_official")
+    http = FakeHttp(
+        {
+            source.list_url: "list-1",
+            "https://example.com/detail-1.htm": "detail",
+            "https://example.com/page-2.htm": "list-2",
+            "https://example.com/detail-2.htm": "detail",
+            "https://example.com/page-3.htm": "list-3",
+            "https://example.com/detail-3.htm": "detail",
+            "https://example.com/page-4.htm": "list-4",
+            "https://example.com/detail-4.htm": "detail",
+            "https://example.com/page-5.htm": "list-5",
+            "https://example.com/detail-5.htm": "detail",
+        }
+    )
+    pipeline = NoticePipeline(
+        config=config,
+        storage=NoticeStorage(config.state_path, config.sources),
+        http_client=http,
+        summarizer=FakeSummarizer(),
+        adapter_factory=lambda selected_source: FivePageAdapter(selected_source),
+    )
+
+    result = pipeline.run(
+        source_ids=["shu_official"],
+        dry_run=False,
+        stop_after_seen_pages=None,
+        report_date=date(2026, 6, 30),
+    )
+
+    requested_list_pages = [url for url in http.requested if "detail-" not in url]
+    assert result.new_count == 5
+    assert requested_list_pages == [
+        source.list_url,
+        "https://example.com/page-2.htm",
+        "https://example.com/page-3.htm",
+        "https://example.com/page-4.htm",
+        "https://example.com/page-5.htm",
+    ]
+
+
+def test_pipeline_stops_backfill_after_notices_older_than_window(tmp_path):
+    config = load_config(
+        env={},
+        repo_root=tmp_path,
+        state_path=tmp_path / "state.sqlite3",
+        output_dir=tmp_path / "results",
+    )
+    source = config.source_by_id("shu_official")
+    http = FakeHttp(
+        {
+            source.list_url: "recent",
+            "https://example.com/recent.htm": "detail",
+            "https://example.com/page-old.htm": "old",
+        }
+    )
+    pipeline = NoticePipeline(
+        config=config,
+        storage=NoticeStorage(config.state_path, config.sources),
+        http_client=http,
+        summarizer=FakeSummarizer(),
+        adapter_factory=lambda selected_source: DatedPagingAdapter(selected_source),
+    )
+
+    result = pipeline.run(
+        source_ids=["shu_official"],
+        dry_run=False,
+        max_pages_per_source=None,
+        stop_after_seen_pages=None,
+        report_date=date(2026, 7, 1),
+        lookback_days=365,
+    )
+
+    assert result.new_count == 1
+    assert "https://example.com/old.htm" not in http.requested
+
+
+def test_pipeline_defaults_to_daily_lookback_when_not_explicit(tmp_path):
+    config = load_config(
+        env={},
+        repo_root=tmp_path,
+        state_path=tmp_path / "state.sqlite3",
+        output_dir=tmp_path / "results",
+    )
+    source = config.source_by_id("shu_official")
+    http = FakeHttp(
+        {
+            source.list_url: "recent",
+            "https://example.com/recent.htm": "detail",
+            "https://example.com/page-old.htm": "old",
+        }
+    )
+    pipeline = NoticePipeline(
+        config=config,
+        storage=NoticeStorage(config.state_path, config.sources),
+        http_client=http,
+        summarizer=FakeSummarizer(),
+        adapter_factory=lambda selected_source: DatedPagingAdapter(selected_source),
+    )
+
+    result = pipeline.run(
+        source_ids=["shu_official"],
+        dry_run=False,
+        report_date=date(2026, 7, 1),
+    )
+
+    assert result.new_count == 1
+    assert "https://example.com/old.htm" not in http.requested
+
+
+def test_pipeline_stops_when_next_page_repeats_current_url(tmp_path):
+    config = load_config(
+        env={},
+        repo_root=tmp_path,
+        state_path=tmp_path / "state.sqlite3",
+        output_dir=tmp_path / "results",
+    )
+    source = config.source_by_id("shu_official")
+    http = FakeHttp({source.list_url: "list-1", "https://example.com/detail-1.htm": "detail"})
+    pipeline = NoticePipeline(
+        config=config,
+        storage=NoticeStorage(config.state_path, config.sources),
+        http_client=http,
+        summarizer=FakeSummarizer(),
+        adapter_factory=lambda selected_source: LoopingAdapter(selected_source),
+    )
+
+    pipeline.run(
+        source_ids=["shu_official"],
+        dry_run=False,
+        max_pages_per_source=None,
+        stop_after_seen_pages=None,
+        report_date=date(2026, 7, 1),
+    )
+
+    assert http.requested.count(source.list_url) == 1
+
+
 def test_pipeline_fetches_detail_pages_with_small_thread_pool(tmp_path):
     config = load_config(
         env={},
@@ -377,6 +707,7 @@ def test_pipeline_updates_seen_notice_detail_hash_without_resummarizing(tmp_path
         limit=1,
         max_pages_per_source=1,
         stop_after_seen_pages=1,
+        refresh_seen_details=True,
         report_date=date(2026, 6, 30),
     )
 
@@ -386,6 +717,60 @@ def test_pipeline_updates_seen_notice_detail_hash_without_resummarizing(tmp_path
     assert summarizer.details == []
     assert row["status"] == "updated_seen"
     assert "新详情页正文" in row["content"]
+
+
+def test_pipeline_skips_seen_detail_refresh_when_disabled(tmp_path):
+    config = load_config(
+        env={},
+        repo_root=tmp_path,
+        state_path=tmp_path / "state.sqlite3",
+        output_dir=tmp_path / "results",
+    )
+    source = config.source_by_id("shu_official")
+    storage = NoticeStorage(config.state_path, config.sources)
+    storage.initialize()
+    item = NoticeListItem(
+        source_id=source.id,
+        url="https://example.com/detail-1.htm",
+        canonical_url="https://example.com/detail-1.htm",
+        title="测试通知 1",
+        published_at=datetime(2026, 6, 16),
+        list_excerpt="列表摘要",
+    )
+    notice_id = storage.upsert_seen_item(item)
+    storage.save_detail(
+        notice_id,
+        NoticeDetail(
+            source_id=item.source_id,
+            url=item.url,
+            canonical_url=item.canonical_url,
+            title=item.title,
+            content="旧详情正文",
+            published_at=item.published_at,
+            list_excerpt=item.list_excerpt,
+        ),
+    )
+    http = FakeHttp({source.list_url: "list-1", "https://example.com/detail-1.htm": "detail"})
+    pipeline = NoticePipeline(
+        config=config,
+        storage=storage,
+        http_client=http,
+        summarizer=FakeSummarizer(),
+        adapter_factory=lambda selected_source: FakeAdapter(selected_source),
+    )
+
+    pipeline.run(
+        source_ids=["shu_official"],
+        dry_run=False,
+        max_pages_per_source=1,
+        stop_after_seen_pages=1,
+        refresh_seen_details=False,
+        report_date=date(2026, 6, 30),
+    )
+
+    row = storage.find_by_source_url("shu_official", item.canonical_url)
+    assert row["status"] == "detailed"
+    assert http.requested == [source.list_url]
 
 
 def test_create_adapter_loads_adapter_from_import_path(tmp_path):

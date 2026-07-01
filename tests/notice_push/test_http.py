@@ -1,4 +1,5 @@
 import pytest
+import threading
 
 from src.notice_push.http import HttpClient
 
@@ -103,3 +104,28 @@ def test_http_client_uses_exponential_backoff_between_retries(monkeypatch):
 
     assert session.calls == 3
     assert sleep_calls == [0.5, 1.0]
+
+
+def test_http_client_uses_thread_local_sessions_from_factory():
+    created_sessions = []
+    lock = threading.Lock()
+
+    def session_factory():
+        session = _FakeSession(_FakeResponse("通知正文".encode("utf-8")))
+        with lock:
+            created_sessions.append(session)
+        return session
+
+    client = HttpClient(session_factory=session_factory)
+
+    threads = [
+        threading.Thread(target=lambda: client.get_text("https://example.com")),
+        threading.Thread(target=lambda: client.get_text("https://example.com")),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(created_sessions) == 2
+    assert all(session.calls == 1 for session in created_sessions)

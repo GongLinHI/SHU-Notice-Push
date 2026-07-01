@@ -14,10 +14,7 @@ def test_load_config_uses_defaults_and_repo_relative_paths(tmp_path):
     assert config.state_path == tmp_path / "resources" / "notice_state.sqlite3"
     assert config.output_dir == tmp_path / "resources" / "results"
     assert config.prompt_name == "notice_summary_v1"
-    assert config.deepseek_model == "deepseek-chat"
-    assert config.summary_max_workers == 5
-    assert config.max_pages_per_source == 3
-    assert config.stop_after_seen_pages == 2
+    assert config.deepseek_model == "deepseek-v4-flash"
     assert config.detail_min_chars == 30
     assert config.runtime_profiles["daily"] == NoticeRuntimeProfile(
         name="daily",
@@ -28,6 +25,17 @@ def test_load_config_uses_defaults_and_repo_relative_paths(tmp_path):
         http_timeout=12,
         http_max_retries=2,
         http_initial_retry_delay=0.8,
+        lookback_days=365,
+        retry_failed=True,
+        failed_retry_limit=3,
+        failed_retry_after_hours=12,
+        refresh_seen_details=False,
+        refresh_seen_max_workers=1,
+        refresh_seen_limit=0,
+        llm_timeout=60,
+        llm_max_retries=3,
+        llm_initial_retry_delay=1.0,
+        llm_retry_backoff=2.0,
     )
     assert config.runtime_profiles["backfill"] == NoticeRuntimeProfile(
         name="backfill",
@@ -38,6 +46,17 @@ def test_load_config_uses_defaults_and_repo_relative_paths(tmp_path):
         http_timeout=20,
         http_max_retries=3,
         http_initial_retry_delay=1.0,
+        lookback_days=365,
+        retry_failed=True,
+        failed_retry_limit=3,
+        failed_retry_after_hours=6,
+        refresh_seen_details=True,
+        refresh_seen_max_workers=2,
+        refresh_seen_limit=200,
+        llm_timeout=90,
+        llm_max_retries=3,
+        llm_initial_retry_delay=1.0,
+        llm_retry_backoff=2.0,
     )
     assert [source.id for source in config.sources] == [
         "shu_official",
@@ -46,14 +65,14 @@ def test_load_config_uses_defaults_and_repo_relative_paths(tmp_path):
     ]
 
 
-def test_load_config_supports_path_and_runtime_overrides(tmp_path):
+def test_load_config_supports_path_and_model_env_override_only(tmp_path):
     state_path = tmp_path / "isolated" / "state.sqlite3"
     output_dir = tmp_path / "isolated" / "results"
 
     config = load_config(
         env={
             "PROMPT_NAME": "notice_summary_v2",
-            "DEEPSEEK_MODEL": "deepseek-reasoner",
+            "DEEPSEEK_MODEL": "deepseek-v4-flash",
             "SUMMARY_MAX_WORKERS": "2",
             "MAX_PAGES_PER_SOURCE": "7",
             "STOP_AFTER_SEEN_PAGES": "4",
@@ -67,32 +86,65 @@ def test_load_config_supports_path_and_runtime_overrides(tmp_path):
 
     assert config.state_path == state_path
     assert config.output_dir == output_dir
-    assert config.prompt_name == "notice_summary_v2"
-    assert config.deepseek_model == "deepseek-reasoner"
-    assert config.summary_max_workers == 2
-    assert config.max_pages_per_source == 7
-    assert config.stop_after_seen_pages == 4
-    assert config.detail_min_chars == 80
-    assert config.source_by_id("graduate_school").enabled is False
+    assert config.prompt_name == "notice_summary_v1"
+    assert config.deepseek_model == "deepseek-v4-flash"
+    assert config.detail_min_chars == 30
+    assert config.source_by_id("graduate_school").enabled is True
 
 
-def test_load_config_supports_profile_specific_overrides(tmp_path):
+def test_load_config_reads_profile_values_from_yaml_not_environment(tmp_path):
+    config_dir = tmp_path / "resources" / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "runtime.yml").write_text(
+        "\n".join(
+            [
+                "profiles:",
+                "  daily:",
+                "    max_pages_per_source: 6",
+                "    stop_after_seen_pages: 3",
+                "    detail_max_workers: 5",
+                "    summary_max_workers: 6",
+                "    http_timeout: 14",
+                "    http_max_retries: 4",
+                "    http_initial_retry_delay: 1.2",
+                "    lookback_days: 120",
+                "    retry_failed: false",
+                "    failed_retry_limit: 9",
+                "    failed_retry_after_hours: 3",
+                "    refresh_seen_details: true",
+                "    refresh_seen_max_workers: 2",
+                "    refresh_seen_limit: 12",
+                "    llm_timeout: 55",
+                "    llm_max_retries: 4",
+                "    llm_initial_retry_delay: 1.3",
+                "    llm_retry_backoff: 2.5",
+                "  backfill:",
+                "    max_pages_per_source: 25",
+                "    stop_after_seen_pages: 0",
+                "    detail_max_workers: 7",
+                "    summary_max_workers: 8",
+                "    http_timeout: 30",
+                "    http_max_retries: 5",
+                "    http_initial_retry_delay: 1.5",
+                "    lookback_days: 730",
+                "    retry_failed: true",
+                "    failed_retry_limit: 8",
+                "    failed_retry_after_hours: 1",
+                "    refresh_seen_details: false",
+                "    refresh_seen_max_workers: 5",
+                "    refresh_seen_limit: 0",
+                "    llm_timeout: 80",
+                "    llm_max_retries: 5",
+                "    llm_initial_retry_delay: 1.7",
+                "    llm_retry_backoff: 3.0",
+            ]
+        ),
+        encoding="utf-8",
+    )
     config = load_config(
         env={
-            "DAILY_MAX_PAGES_PER_SOURCE": "6",
-            "DAILY_STOP_AFTER_SEEN_PAGES": "3",
-            "DAILY_DETAIL_MAX_WORKERS": "5",
-            "DAILY_SUMMARY_MAX_WORKERS": "6",
-            "DAILY_HTTP_TIMEOUT": "14",
-            "DAILY_HTTP_MAX_RETRIES": "4",
-            "DAILY_HTTP_INITIAL_RETRY_DELAY": "1.2",
-            "BACKFILL_MAX_PAGES_PER_SOURCE": "25",
-            "BACKFILL_STOP_AFTER_SEEN_PAGES": "0",
-            "BACKFILL_DETAIL_MAX_WORKERS": "7",
-            "BACKFILL_SUMMARY_MAX_WORKERS": "8",
-            "BACKFILL_HTTP_TIMEOUT": "30",
-            "BACKFILL_HTTP_MAX_RETRIES": "5",
-            "BACKFILL_HTTP_INITIAL_RETRY_DELAY": "1.5",
+            "DAILY_MAX_PAGES_PER_SOURCE": "99",
+            "BACKFILL_MAX_PAGES_PER_SOURCE": "99",
         },
         repo_root=tmp_path,
     )
@@ -106,6 +158,17 @@ def test_load_config_supports_profile_specific_overrides(tmp_path):
         http_timeout=14,
         http_max_retries=4,
         http_initial_retry_delay=1.2,
+        lookback_days=120,
+        retry_failed=False,
+        failed_retry_limit=9,
+        failed_retry_after_hours=3,
+        refresh_seen_details=True,
+        refresh_seen_max_workers=2,
+        refresh_seen_limit=12,
+        llm_timeout=55,
+        llm_max_retries=4,
+        llm_initial_retry_delay=1.3,
+        llm_retry_backoff=2.5,
     )
     assert config.runtime_profiles["backfill"] == NoticeRuntimeProfile(
         name="backfill",
@@ -116,10 +179,21 @@ def test_load_config_supports_profile_specific_overrides(tmp_path):
         http_timeout=30,
         http_max_retries=5,
         http_initial_retry_delay=1.5,
+        lookback_days=730,
+        retry_failed=True,
+        failed_retry_limit=8,
+        failed_retry_after_hours=1,
+        refresh_seen_details=False,
+        refresh_seen_max_workers=5,
+        refresh_seen_limit=0,
+        llm_timeout=80,
+        llm_max_retries=5,
+        llm_initial_retry_delay=1.7,
+        llm_retry_backoff=3.0,
     )
 
 
-def test_load_config_reads_defaults_from_yaml_before_env_overrides(tmp_path):
+def test_load_config_reads_runtime_values_from_yaml(tmp_path):
     config_dir = tmp_path / "resources" / "config"
     config_dir.mkdir(parents=True)
     (config_dir / "runtime.yml").write_text(
@@ -127,9 +201,6 @@ def test_load_config_reads_defaults_from_yaml_before_env_overrides(tmp_path):
             [
                 "prompt_name: notice_summary_v3",
                 "deepseek_model: deepseek-v4-flash",
-                "summary_max_workers: 4",
-                "max_pages_per_source: 9",
-                "stop_after_seen_pages: 5",
                 "detail_min_chars: 60",
                 "sources:",
                 "  custom_source:",
@@ -149,6 +220,17 @@ def test_load_config_reads_defaults_from_yaml_before_env_overrides(tmp_path):
                 "    http_timeout: 16",
                 "    http_max_retries: 4",
                 "    http_initial_retry_delay: 1.1",
+                "    lookback_days: 180",
+                "    retry_failed: true",
+                "    failed_retry_limit: 4",
+                "    failed_retry_after_hours: 2",
+                "    refresh_seen_details: true",
+                "    refresh_seen_max_workers: 2",
+                "    refresh_seen_limit: 10",
+                "    llm_timeout: 75",
+                "    llm_max_retries: 4",
+                "    llm_initial_retry_delay: 1.4",
+                "    llm_retry_backoff: 2.1",
             ]
         ),
         encoding="utf-8",
@@ -162,11 +244,8 @@ def test_load_config_reads_defaults_from_yaml_before_env_overrides(tmp_path):
         repo_root=tmp_path,
     )
 
-    assert config.prompt_name == "notice_summary_v5"
+    assert config.prompt_name == "notice_summary_v3"
     assert config.deepseek_model == "deepseek-v4-flash"
-    assert config.summary_max_workers == 4
-    assert config.max_pages_per_source == 9
-    assert config.stop_after_seen_pages == 5
     assert config.detail_min_chars == 60
     assert config.source_by_id("custom_source") == NoticeSource(
         id="custom_source",
@@ -180,9 +259,20 @@ def test_load_config_reads_defaults_from_yaml_before_env_overrides(tmp_path):
     assert config.runtime_profiles["daily"].max_pages_per_source == 8
     assert config.runtime_profiles["daily"].detail_max_workers == 3
     assert config.runtime_profiles["daily"].summary_max_workers == 4
-    assert config.runtime_profiles["daily"].http_timeout == 18
+    assert config.runtime_profiles["daily"].http_timeout == 16
     assert config.runtime_profiles["daily"].http_max_retries == 4
     assert config.runtime_profiles["daily"].http_initial_retry_delay == 1.1
+    assert config.runtime_profiles["daily"].lookback_days == 180
+    assert config.runtime_profiles["daily"].retry_failed is True
+    assert config.runtime_profiles["daily"].failed_retry_limit == 4
+    assert config.runtime_profiles["daily"].failed_retry_after_hours == 2
+    assert config.runtime_profiles["daily"].refresh_seen_details is True
+    assert config.runtime_profiles["daily"].refresh_seen_max_workers == 2
+    assert config.runtime_profiles["daily"].refresh_seen_limit == 10
+    assert config.runtime_profiles["daily"].llm_timeout == 75
+    assert config.runtime_profiles["daily"].llm_max_retries == 4
+    assert config.runtime_profiles["daily"].llm_initial_retry_delay == 1.4
+    assert config.runtime_profiles["daily"].llm_retry_backoff == 2.1
 
 
 def test_notice_source_and_list_item_are_immutable():

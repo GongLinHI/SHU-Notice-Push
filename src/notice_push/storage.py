@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -50,6 +50,10 @@ class NoticeStorage:
                     summary_generated_at text,
                     detail_fetched_at text,
                     error_message text not null default '',
+                    failure_type text not null default '',
+                    failure_count integer not null default 0,
+                    last_failed_at text,
+                    next_retry_at text,
                     foreign key(source_id) references sources(id),
                     unique(source_id, canonical_url)
                 );
@@ -58,6 +62,7 @@ class NoticeStorage:
                 on notices(published_at, first_seen_at);
                 """
             )
+            self._ensure_notice_columns(conn)
             now = _now()
             for source in self.sources:
                 conn.execute(
@@ -85,11 +90,25 @@ class NoticeStorage:
                 )
 
     def filter_new_items(self, items: Iterable[NoticeListItem]) -> list[NoticeListItem]:
+        return self.filter_processable_items(items, retry_failed=False)
+
+    def filter_processable_items(
+        self,
+        items: Iterable[NoticeListItem],
+        *,
+        retry_failed: bool = False,
+        failed_retry_limit: int = 0,
+    ) -> list[NoticeListItem]:
         new_items: list[NoticeListItem] = []
+        now = _now()
         with self._connect() as conn:
             for item in items:
                 row = conn.execute(
-                    "select id from notices where source_id = ? and canonical_url = ?",
+                    """
+                    select id, status, failure_count, next_retry_at
+                    from notices
+                    where source_id = ? and canonical_url = ?
+                    """,
                     (item.source_id, item.canonical_url),
                 ).fetchone()
                 if row is None:
@@ -110,10 +129,12 @@ class NoticeStorage:
                             item.title,
                             item.list_excerpt,
                             _dt(item.published_at),
-                            _now(),
+                            now,
                             row["id"],
                         ),
                     )
+                    if retry_failed and _row_retryable(row, failed_retry_limit, now):
+                        new_items.append(item)
         return new_items
 
     def find_seen_items(self, items: Iterable[NoticeListItem]) -> dict[str, sqlite3.Row]:
@@ -174,8 +195,30 @@ class NoticeStorage:
                     list_excerpt = ?,
                     content_hash = ?,
                     detail_fetched_at = ?,
-                    status = 'detailed',
-                    error_message = ''
+                    status = case
+                        when status = 'failed' and failure_type != '' and failure_type not like 'detail_%' then status
+                        else 'detailed'
+                    end,
+                    error_message = case
+                        when failure_type = '' or failure_type like 'detail_%' then ''
+                        else error_message
+                    end,
+                    failure_type = case
+                        when failure_type = '' or failure_type like 'detail_%' then ''
+                        else failure_type
+                    end,
+                    failure_count = case
+                        when failure_type = '' or failure_type like 'detail_%' then 0
+                        else failure_count
+                    end,
+                    last_failed_at = case
+                        when failure_type = '' or failure_type like 'detail_%' then null
+                        else last_failed_at
+                    end,
+                    next_retry_at = case
+                        when failure_type = '' or failure_type like 'detail_%' then null
+                        else next_retry_at
+                    end
                 where id = ?
                 """,
                 (
@@ -211,7 +254,11 @@ class NoticeStorage:
                     summary_model = '',
                     summary_prompt_version = '',
                     summary_generated_at = null,
-                    error_message = ''
+                    error_message = '',
+                    failure_type = '',
+                    failure_count = 0,
+                    last_failed_at = null,
+                    next_retry_at = null
                 where id = ?
                 """,
                 (
@@ -236,7 +283,11 @@ class NoticeStorage:
                     summary_prompt_version = ?,
                     summary_generated_at = ?,
                     status = 'summarized',
-                    error_message = ''
+                    error_message = '',
+                    failure_type = '',
+                    failure_count = 0,
+                    last_failed_at = null,
+                    next_retry_at = null
                 where id = ?
                 """,
                 (
@@ -248,11 +299,37 @@ class NoticeStorage:
                 ),
             )
 
-    def mark_failed(self, notice_id: int, reason: str) -> None:
+    def mark_failed(
+        self,
+        notice_id: int,
+        reason: str,
+        *,
+        failure_type: str = "unknown",
+        retry_after_hours: int = 0,
+        retry_limit: int = 3,
+    ) -> None:
+        failed_at = _now()
+        next_retry_at = (
+            _dt(datetime.now(timezone.utc) + timedelta(hours=max(0, retry_after_hours)))
+            if retry_after_hours >= 0
+            else None
+        )
         with self._connect() as conn:
             conn.execute(
-                "update notices set status = 'failed', error_message = ? where id = ?",
-                (reason, notice_id),
+                """
+                update notices set
+                    status = 'failed',
+                    error_message = ?,
+                    failure_type = ?,
+                    failure_count = failure_count + 1,
+                    last_failed_at = ?,
+                    next_retry_at = case
+                        when failure_count + 1 < ? then ?
+                        else null
+                    end
+                where id = ?
+                """,
+                (reason, failure_type, failed_at, retry_limit, next_retry_at, notice_id),
             )
 
     def mark_seen_baseline(self, items: Iterable[NoticeListItem]) -> int:
@@ -323,9 +400,21 @@ class NoticeStorage:
             return int(conn.execute("select count(*) from sources").fetchone()[0])
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
         return conn
+
+    def _ensure_notice_columns(self, conn: sqlite3.Connection) -> None:
+        existing = {row["name"] for row in conn.execute("pragma table_info(notices)").fetchall()}
+        columns = {
+            "failure_type": "text not null default ''",
+            "failure_count": "integer not null default 0",
+            "last_failed_at": "text",
+            "next_retry_at": "text",
+        }
+        for name, definition in columns.items():
+            if name not in existing:
+                conn.execute(f"alter table notices add column {name} {definition}")
 
 
 def _now() -> str:
@@ -334,3 +423,12 @@ def _now() -> str:
 
 def _dt(value: Optional[datetime]) -> Optional[str]:
     return value.replace(microsecond=0).isoformat() if value else None
+
+
+def _row_retryable(row: sqlite3.Row, retry_limit: int, now: str) -> bool:
+    if row["status"] != "failed":
+        return False
+    if retry_limit <= 0 or int(row["failure_count"] or 0) >= retry_limit:
+        return False
+    next_retry_at = row["next_retry_at"]
+    return not next_retry_at or str(next_retry_at) <= now

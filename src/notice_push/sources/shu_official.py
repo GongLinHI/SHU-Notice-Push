@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from bs4 import BeautifulSoup
 
-from src.notice_push.html_utils import clean_text, extract_text_blocks, parse_date
+from src.notice_push.html_utils import clean_text, extract_text_blocks, parse_date, select_main_content
 from src.notice_push.models import NoticeDetail, NoticeListItem
 from src.notice_push.sources.base import NoticeSourceAdapter
 
@@ -34,7 +34,7 @@ class ShuOfficialAdapter(NoticeSourceAdapter):
         soup = BeautifulSoup(html, "html.parser")
         title_node = soup.select_one("h1[align='center'], h1")
         meta_node = soup.select_one(".xx")
-        content_node = soup.select_one(".v_news_content")
+        content_node = select_main_content(soup, [".v_news_content"])
         content = extract_text_blocks(content_node) if content_node else ""
         return NoticeDetail(
             source_id=item.source_id,
