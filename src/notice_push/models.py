@@ -23,6 +23,15 @@ class Attachment:
 
 
 @dataclass(frozen=True)
+class NoticeAsset:
+    kind: str
+    role: str
+    name: str
+    url: str
+    mime_type: str = ""
+
+
+@dataclass(frozen=True)
 class NoticeListItem:
     source_id: str
     url: str
@@ -42,6 +51,8 @@ class NoticeDetail:
     published_at: Optional[datetime] = None
     list_excerpt: str = ""
     attachments: tuple[Attachment, ...] = field(default_factory=tuple)
+    assets: tuple[NoticeAsset, ...] = field(default_factory=tuple)
+    content_kind: str = "text"
 
 
 @dataclass(frozen=True)

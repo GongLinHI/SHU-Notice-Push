@@ -2,8 +2,8 @@ from datetime import date, datetime
 import threading
 
 from src.notice_push.config import load_config
-from src.notice_push.models import NoticeDetail, NoticeListItem, NoticeSummary
-from src.notice_push.pipeline import NoticePipeline, create_adapter
+from src.notice_push.models import NoticeAsset, NoticeDetail, NoticeListItem, NoticeSummary
+from src.notice_push.pipeline import NoticePipeline, create_adapter, is_summarizable_detail
 from src.notice_push.storage import NoticeStorage
 
 
@@ -87,6 +87,52 @@ class MultiItemAdapter(FakeAdapter):
         return []
 
 
+class PdfOnlyAdapter(FakeAdapter):
+    def parse_detail(self, html, item):
+        return NoticeDetail(
+            source_id=item.source_id,
+            url=item.url,
+            canonical_url=item.canonical_url,
+            title=item.title,
+            content="",
+            published_at=item.published_at,
+            list_excerpt=item.list_excerpt,
+            assets=(
+                NoticeAsset(
+                    kind="pdf",
+                    role="primary",
+                    name="巡察公告.pdf",
+                    url="https://example.com/inspection.pdf",
+                    mime_type="application/pdf",
+                ),
+            ),
+            content_kind="pdf",
+        )
+
+
+class UnsupportedVideoAdapter(FakeAdapter):
+    def parse_detail(self, html, item):
+        return NoticeDetail(
+            source_id=item.source_id,
+            url=item.url,
+            canonical_url=item.canonical_url,
+            title=item.title,
+            content="",
+            published_at=item.published_at,
+            list_excerpt=item.list_excerpt,
+            assets=(
+                NoticeAsset(
+                    kind="external_video",
+                    role="primary",
+                    name="看看新闻视频页",
+                    url="https://www.kankanews.com/detail/dZ2e81vaawR",
+                    mime_type="text/html",
+                ),
+            ),
+            content_kind="video",
+        )
+
+
 class DatedPagingAdapter(FakeAdapter):
     def parse_list_page(self, html, page_url):
         if html == "recent":
@@ -159,6 +205,62 @@ class RecordingHttp:
         with self._lock:
             self.events.append(("end", url))
         return "detail"
+
+
+def test_pdf_detail_is_summarizable_even_when_text_is_short():
+    detail = NoticeDetail(
+        source_id="management_school",
+        url="https://ms.shu.edu.cn/info/1245/91745.htm",
+        canonical_url="https://ms.shu.edu.cn/info/1245/91745.htm",
+        title="巡察公告",
+        content="",
+        assets=(
+            NoticeAsset(
+                kind="pdf",
+                role="primary",
+                name="巡察公告.pdf",
+                url="https://ms.shu.edu.cn/__local/report.pdf",
+                mime_type="application/pdf",
+            ),
+        ),
+        content_kind="pdf",
+    )
+
+    assert is_summarizable_detail(detail, min_chars=30)
+
+
+def test_image_detail_is_summarizable_even_when_text_is_short():
+    detail = NoticeDetail(
+        source_id="management_school",
+        url="https://ms.shu.edu.cn/info/1245/91475.htm",
+        canonical_url="https://ms.shu.edu.cn/info/1245/91475.htm",
+        title="管理学院2026年寒假值班安排",
+        content="",
+        assets=(
+            NoticeAsset(
+                kind="image",
+                role="primary",
+                name="值班安排.png",
+                url="https://ms.shu.edu.cn/__local/duty.png",
+                mime_type="image/png",
+            ),
+        ),
+        content_kind="image",
+    )
+
+    assert is_summarizable_detail(detail, min_chars=30)
+
+
+def test_empty_detail_without_supported_assets_is_not_summarizable():
+    detail = NoticeDetail(
+        source_id="graduate_school",
+        url="https://gs.shu.edu.cn/info/1029/empty.htm",
+        canonical_url="https://gs.shu.edu.cn/info/1029/empty.htm",
+        title="空详情",
+        content="",
+    )
+
+    assert not is_summarizable_detail(detail, min_chars=30)
 
 
 def test_pipeline_dry_run_fetches_list_and_detail_without_mutating_state(tmp_path):
@@ -234,6 +336,72 @@ def test_pipeline_run_persists_summary_and_writes_report(tmp_path):
     assert result.report_path == tmp_path / "results" / "2026-06-30.md"
     assert "## 上海大学官网|行政|周常事务|测试通知 1" in result.report_path.read_text(encoding="utf-8")
     assert storage.find_by_source_url("shu_official", "https://example.com/detail-1.htm")["status"] == "summarized"
+
+
+def test_pipeline_accepts_pdf_asset_detail_without_text_body(tmp_path):
+    config = load_config(
+        env={},
+        repo_root=tmp_path,
+        state_path=tmp_path / "state.sqlite3",
+        output_dir=tmp_path / "results",
+    )
+    source = config.source_by_id("shu_official")
+    storage = NoticeStorage(config.state_path, config.sources)
+    summarizer = FakeSummarizer()
+    pipeline = NoticePipeline(
+        config=config,
+        storage=storage,
+        http_client=FakeHttp({source.list_url: "list-1", "https://example.com/detail-1.htm": "detail"}),
+        summarizer=summarizer,
+        adapter_factory=lambda selected_source: PdfOnlyAdapter(selected_source),
+    )
+
+    result = pipeline.run(
+        source_ids=["shu_official"],
+        dry_run=False,
+        limit=1,
+        max_pages_per_source=1,
+        report_date=date(2026, 6, 30),
+    )
+
+    row = storage.find_by_source_url("shu_official", "https://example.com/detail-1.htm")
+    assert result.summarized_count == 1
+    assert result.failed == ()
+    assert summarizer.details[0].content_kind == "pdf"
+    assert row["status"] == "summarized"
+
+
+def test_pipeline_marks_video_asset_detail_as_unsupported(tmp_path):
+    config = load_config(
+        env={},
+        repo_root=tmp_path,
+        state_path=tmp_path / "state.sqlite3",
+        output_dir=tmp_path / "results",
+    )
+    source = config.source_by_id("shu_official")
+    storage = NoticeStorage(config.state_path, config.sources)
+    pipeline = NoticePipeline(
+        config=config,
+        storage=storage,
+        http_client=FakeHttp({source.list_url: "list-1", "https://example.com/detail-1.htm": "detail"}),
+        summarizer=FakeSummarizer(),
+        adapter_factory=lambda selected_source: UnsupportedVideoAdapter(selected_source),
+    )
+
+    result = pipeline.run(
+        source_ids=["shu_official"],
+        dry_run=False,
+        limit=1,
+        max_pages_per_source=1,
+        report_date=date(2026, 6, 30),
+    )
+
+    row = storage.find_by_source_url("shu_official", "https://example.com/detail-1.htm")
+    assert result.summarized_count == 0
+    assert len(result.failed) == 1
+    assert result.failed[0].reason == "unsupported video content"
+    assert row["status"] == "failed"
+    assert row["failure_type"] == "unsupported_video_content"
 
 
 def test_pipeline_retries_failed_notices_when_retry_policy_allows(tmp_path):

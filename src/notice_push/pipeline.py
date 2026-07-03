@@ -21,6 +21,8 @@ LEGACY_ADAPTER_ALIASES = {
 }
 UNBOUNDED_PAGE_SCAN = float("inf")
 UNSET = object()
+SUPPORTED_ASSET_KINDS = {"pdf", "image"}
+SUPPORTED_ASSET_ROLES = {"primary", "attachment"}
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,10 @@ class PreparedNotice:
 class FailureRetryPolicy:
     limit: int = 0
     after_hours: int = 0
+
+
+class UnsupportedContentError(ValueError):
+    pass
 
 
 class NoticePipeline:
@@ -257,7 +263,9 @@ class NoticePipeline:
         try:
             detail_html = self.http_client.get_text(item.url)
             detail: NoticeDetail = adapter.parse_detail(detail_html, item)
-            if len(detail.content.strip()) < self.config.detail_min_chars:
+            if not is_summarizable_detail(detail, self.config.detail_min_chars):
+                if detail.content_kind in {"video", "external_video"}:
+                    raise UnsupportedContentError("unsupported video content")
                 raise ValueError("detail content is empty or too short")
 
             if dry_run:
@@ -337,7 +345,7 @@ class NoticePipeline:
             try:
                 detail_html = self.http_client.get_text(item.url)
                 detail = adapter.parse_detail(detail_html, item)
-                if len(detail.content.strip()) < self.config.detail_min_chars:
+                if not is_summarizable_detail(detail, self.config.detail_min_chars):
                     return
                 notice_id = int(seen_rows[item.canonical_url]["id"])
                 self.storage.update_seen_detail_if_changed(notice_id, detail)
@@ -452,8 +460,19 @@ def _page_is_before_cutoff(items: list[NoticeListItem], cutoff: Optional[datetim
     return bool(dated_items) and all(item.published_at < cutoff for item in dated_items)
 
 
+def is_summarizable_detail(detail: NoticeDetail, min_chars: int) -> bool:
+    if len(detail.content.strip()) >= min_chars:
+        return True
+    return any(
+        asset.kind in SUPPORTED_ASSET_KINDS and asset.role in SUPPORTED_ASSET_ROLES
+        for asset in detail.assets
+    )
+
+
 def _classify_failure(exc: Exception, *, stage: str = "") -> str:
     message = str(exc).lower()
+    if isinstance(exc, UnsupportedContentError) or "unsupported video content" in message:
+        return "unsupported_video_content"
     if "empty or too short" in message:
         return "detail_empty"
     if "timeout" in message:
