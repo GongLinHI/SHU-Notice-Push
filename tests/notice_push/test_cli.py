@@ -2,8 +2,10 @@ from pathlib import Path
 
 import pytest
 
-from src.notice_push.__main__ import main
+from src.notice_push.__main__ import build_pipeline, main
+from src.notice_push.config import load_config
 from src.notice_push.models import PipelineResult
+from src.notice_push.summarizer import KimiMultimodalSummarizer, NoticeSummarizer, SummarizerRouter
 
 
 class FakePipeline:
@@ -201,3 +203,31 @@ def test_cli_prints_source_error_count_for_no_report(monkeypatch, tmp_path, caps
     assert "summarized_count=0" in output
     assert "failed_count=0" in output
     assert "source_error_count=1" in output
+
+
+def test_build_pipeline_constructs_router_from_llm_provider_config(monkeypatch, tmp_path):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-key")
+    monkeypatch.setenv("KIMI_API_KEY", "kimi-key")
+    monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-unit")
+    monkeypatch.setenv("KIMI_MODEL", "kimi-unit")
+    config = load_config(
+        env={},
+        repo_root=tmp_path,
+        state_path=tmp_path / "state.sqlite3",
+        output_dir=tmp_path / "results",
+    )
+
+    pipeline = build_pipeline(config, config.runtime_profile("daily"))
+
+    assert isinstance(pipeline.summarizer, SummarizerRouter)
+    assert pipeline.summarizer.routing == {"text": "deepseek", "pdf": "kimi", "image": "kimi"}
+    text_summarizer = pipeline.summarizer.provider_summarizers["deepseek"]
+    kimi_summarizer = pipeline.summarizer.provider_summarizers["kimi"]
+    assert isinstance(text_summarizer, NoticeSummarizer)
+    assert isinstance(kimi_summarizer, KimiMultimodalSummarizer)
+    assert text_summarizer.model == "deepseek-unit"
+    assert text_summarizer.api_key == "deepseek-key"
+    assert text_summarizer.base_url == "https://api.deepseek.com"
+    assert kimi_summarizer.model == "kimi-unit"
+    assert kimi_summarizer.api_key == "kimi-key"
+    assert kimi_summarizer.base_url == "https://api.moonshot.cn/v1"

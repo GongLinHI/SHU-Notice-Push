@@ -1,11 +1,12 @@
 # SHU Notice Push
 
-上海大学通知爬取、正文摘要与邮件推送工具。项目会扫描多个上海大学通知源，进入详情页抓取正文，调用 DeepSeek/OpenAI 兼容接口生成结构化摘要，并通过 GitHub Actions 自动发送每日邮件。
+上海大学通知爬取、正文摘要与邮件推送工具。项目会扫描多个上海大学通知源，进入详情页抓取正文，按正文类型路由到 DeepSeek 或 Kimi 生成结构化摘要，并通过 GitHub Actions 自动发送每日邮件。
 
 ## 功能特色
 
 - **多通知源**：默认支持上海大学官网、上海大学管理学院、上海大学研究生院。
 - **正文级摘要**：目录页只用于发现通知，摘要基于详情页正文和附件信息生成。
+- **多模型路由**：文本通知默认走 DeepSeek，PDF 和图片正文默认走 Kimi K2.7 Code；视频正文会明确标记为暂不支持，进入人工复核。
 - **GitHub Actions 自动运行**：每天北京时间 1:00 自动扫描，也支持手动触发。
 - **SQLite 状态管理**：记录已见通知、详情内容、摘要结果和失败重试状态，避免重复推送。
 - **双运行档位**：`daily` 用于日常增量运行，`backfill` 用于补历史或漏跑场景。
@@ -49,15 +50,15 @@ environment: Ubuntu-Python
 
 | Secret | 用途 |
 | --- | --- |
-| `DEEPSEEK_API_KEY` | DeepSeek API Key |
-| `DEEPSEEK_MODEL` | 模型名，建议 `deepseek-v4-flash` |
+| `DEEPSEEK_API_KEY` | DeepSeek API Key，用于文本通知摘要 |
+| `DEEPSEEK_MODEL` | 可选，文本摘要模型名，默认 `deepseek-v4-flash` |
+| `KIMI_API_KEY` | Kimi API Key，用于 PDF 和图片正文摘要 |
+| `KIMI_MODEL` | 可选，多模态摘要模型名，默认 `kimi-k2.7-code` |
 | `MAIL_SERVER_ADDRESS` | SMTP 服务器 |
 | `MAIL_SERVER_PORT` | SMTP 端口 |
 | `MAIL_USERNAME` | SMTP 用户名和发件人 |
 | `MAIL_PASSWORD` | SMTP 密码 |
 | `MAIL_TO` | 收件人 |
-
-`DEEPSEEK_MODEL` 不填时，项目默认使用 `deepseek-v4-flash`。
 
 ### 4. 启用 GitHub Actions
 
@@ -91,15 +92,26 @@ environment: Ubuntu-Python
 
 `.env` 和 GitHub Secrets 只负责密钥及模型名。通知源、页数、并发、超时、重试等业务参数请放在 `runtime.yml`。
 
-### 模型
+### 模型路由
 
-默认模型为：
+默认模型配置在 `runtime.yml` 的 `llm` 下：
 
 ```yaml
-deepseek_model: deepseek-v4-flash
+llm:
+  providers:
+    deepseek:
+      default_model: deepseek-v4-flash
+    kimi:
+      default_model: kimi-k2.7-code
+  routing:
+    text: deepseek
+    pdf: kimi
+    image: kimi
 ```
 
-`deepseek-chat` 与 `deepseek-reasoner` 将于北京时间 2026-07-24 23:59 弃用。出于兼容考虑，二者会分别对应 `deepseek-v4-flash` 的非思考与思考模式；新配置建议直接使用 `deepseek-v4-flash`。
+`.env` 或 GitHub Secrets 中的 `DEEPSEEK_MODEL`、`KIMI_MODEL` 可覆盖默认模型名。`deepseek-chat` 与 `deepseek-reasoner` 将于北京时间 2026-07-24 23:59 弃用；新配置建议直接使用 `deepseek-v4-flash`。
+
+视频正文目前只做检测和失败分类，不会调用 LLM 摘要。
 
 ### 运行档位
 
@@ -156,6 +168,8 @@ Copy-Item .env.example .env
 ```env
 DEEPSEEK_API_KEY=your_deepseek_api_key_here
 DEEPSEEK_MODEL=deepseek-v4-flash
+KIMI_API_KEY=your_kimi_api_key_here
+KIMI_MODEL=kimi-k2.7-code
 ```
 
 ### 3. 试运行
@@ -241,7 +255,8 @@ src/notice_push/
   config.py            YAML 和环境变量加载
   pipeline.py          抓取、详情解析、摘要、报告主流程
   storage.py           SQLite 状态管理
-  summarizer.py        LLM 摘要客户端
+  summarizer.py        LLM 摘要客户端与模型路由
+  media.py             PDF/图片下载与转换
   report.py            Markdown 日报渲染
   sources/             各通知源 Adapter
 

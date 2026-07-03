@@ -51,6 +51,7 @@ class NoticeSummarizer:
         prompt_name: str,
         model: str,
         api_key: Optional[str] = None,
+        base_url: str = DEEPSEEK_BASE_URL,
         client=None,
         timeout: int = 60,
         max_retries: int = 2,
@@ -61,6 +62,7 @@ class NoticeSummarizer:
         self.prompt_name = prompt_name
         self.model = model
         self.api_key = api_key
+        self.base_url = base_url
         self._client = client
         self.timeout = timeout
         self.max_retries = max(1, max_retries)
@@ -125,7 +127,7 @@ class NoticeSummarizer:
         api_key = self.api_key or os.getenv("DEEPSEEK_API_KEY")
         if not api_key:
             raise ValueError("DEEPSEEK_API_KEY must be provided for real summarization")
-        self._client = OpenAI(api_key=api_key, base_url=DEEPSEEK_BASE_URL)
+        self._client = OpenAI(api_key=api_key, base_url=self.base_url)
         return self._client
 
 

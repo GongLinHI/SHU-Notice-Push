@@ -7,10 +7,11 @@ from typing import Optional
 
 from src.notice_push.config import load_config
 from src.notice_push.http import HttpClient
+from src.notice_push.llm import resolve_provider
 from src.notice_push.models import NoticeRuntimeProfile
 from src.notice_push.pipeline import NoticePipeline
 from src.notice_push.storage import NoticeStorage
-from src.notice_push.summarizer import NoticeSummarizer
+from src.notice_push.summarizer import KimiMultimodalSummarizer, NoticeSummarizer, SummarizerRouter
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -44,14 +45,35 @@ def build_pipeline(config, profile: NoticeRuntimeProfile) -> NoticePipeline:
         max_retries=profile.http_max_retries,
         initial_retry_delay=profile.http_initial_retry_delay,
     )
-    summarizer = NoticeSummarizer(
+    deepseek_provider = resolve_provider("deepseek", config.llm_providers["deepseek"])
+    kimi_provider = resolve_provider("kimi", config.llm_providers["kimi"])
+    text_summarizer = NoticeSummarizer(
         prompt_dir=config.repo_root / "resources" / "prompts",
         prompt_name=config.prompt_name,
-        model=config.deepseek_model,
+        model=deepseek_provider.model,
+        api_key=deepseek_provider.api_key,
+        base_url=deepseek_provider.base_url,
         timeout=profile.llm_timeout,
         max_retries=profile.llm_max_retries,
         initial_retry_delay=profile.llm_initial_retry_delay,
         retry_backoff=profile.llm_retry_backoff,
+    )
+    kimi_summarizer = KimiMultimodalSummarizer(
+        prompt_dir=config.repo_root / "resources" / "prompts",
+        prompt_name=config.prompt_name,
+        model=kimi_provider.model,
+        api_key=kimi_provider.api_key,
+        base_url=kimi_provider.base_url,
+        http_client=http_client,
+        timeout=profile.llm_timeout,
+        max_retries=profile.llm_max_retries,
+        initial_retry_delay=profile.llm_initial_retry_delay,
+        retry_backoff=profile.llm_retry_backoff,
+    )
+    summarizer = SummarizerRouter(
+        text_summarizer=text_summarizer,
+        kimi_summarizer=kimi_summarizer,
+        routing=config.llm_routing,
     )
     return NoticePipeline(
         config=config,
