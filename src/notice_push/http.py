@@ -32,6 +32,14 @@ class HttpClient:
         self._retry_backoff = max(1.0, retry_backoff)
 
     def get_text(self, url: str) -> str:
+        response = self._get_response(url)
+        encoding = _choose_encoding(response)
+        return response.content.decode(encoding, errors="replace")
+
+    def get_bytes(self, url: str) -> bytes:
+        return self._get_response(url).content
+
+    def _get_response(self, url: str):
         last_error: Exception | None = None
         for attempt in range(self._max_retries):
             try:
@@ -52,8 +60,7 @@ class HttpClient:
         else:
             raise last_error  # type: ignore[misc]
 
-        encoding = _choose_encoding(response)
-        return response.content.decode(encoding, errors="replace")
+        return response
 
     def _get_session(self):
         if self._session is not None:

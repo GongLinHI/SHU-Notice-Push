@@ -2,8 +2,8 @@ from datetime import datetime
 
 import pytest
 
-from src.notice_push.models import Attachment, NoticeDetail
-from src.notice_push.summarizer import NoticeSummarizer, load_prompt
+from src.notice_push.models import Attachment, NoticeAsset, NoticeDetail
+from src.notice_push.summarizer import KimiMultimodalSummarizer, NoticeSummarizer, SummarizerRouter, load_prompt
 
 
 class _FakeMessage:
@@ -42,6 +42,41 @@ class _FakeClient:
         self.chat = _FakeChat()
 
 
+class _FakeFileObject:
+    def __init__(self, file_id: str):
+        self.id = file_id
+
+
+class _FakeFileContent:
+    def __init__(self, text: str):
+        self.text = text
+
+
+class _FakeFiles:
+    def __init__(self, extracted_text: str = "PDF 正文内容"):
+        self.create_requests = []
+        self.content_requests = []
+        self.delete_requests = []
+        self.extracted_text = extracted_text
+
+    def create(self, **kwargs):
+        self.create_requests.append(kwargs)
+        return _FakeFileObject("file-test-1")
+
+    def content(self, **kwargs):
+        self.content_requests.append(kwargs)
+        return _FakeFileContent(self.extracted_text)
+
+    def delete(self, **kwargs):
+        self.delete_requests.append(kwargs)
+
+
+class _FakeKimiClient(_FakeClient):
+    def __init__(self, extracted_text: str = "PDF 正文内容"):
+        super().__init__()
+        self.files = _FakeFiles(extracted_text=extracted_text)
+
+
 class _FlakyCompletions:
     def __init__(self):
         self.calls = 0
@@ -74,6 +109,46 @@ def make_detail(content: str = "详情页正文包含完整办理要求。") -> 
         published_at=datetime(2026, 6, 16),
         list_excerpt="目录页摘要不应替代正文",
         attachments=(Attachment(name="附件.pdf", url="https://example.com/a.pdf"),),
+    )
+
+
+def make_pdf_detail() -> NoticeDetail:
+    return NoticeDetail(
+        source_id="management_school",
+        url="https://ms.shu.edu.cn/info/1245/91745.htm",
+        canonical_url="https://ms.shu.edu.cn/info/1245/91745.htm",
+        title="巡察公告",
+        content="",
+        assets=(
+            NoticeAsset(
+                kind="pdf",
+                role="primary",
+                name="巡察公告.pdf",
+                url="https://example.com/inspection.pdf",
+                mime_type="application/pdf",
+            ),
+        ),
+        content_kind="pdf",
+    )
+
+
+def make_image_detail() -> NoticeDetail:
+    return NoticeDetail(
+        source_id="management_school",
+        url="https://ms.shu.edu.cn/info/1245/91475.htm",
+        canonical_url="https://ms.shu.edu.cn/info/1245/91475.htm",
+        title="管理学院2026年寒假值班安排",
+        content="",
+        assets=(
+            NoticeAsset(
+                kind="image",
+                role="primary",
+                name="值班安排.png",
+                url="https://example.com/duty.png",
+                mime_type="image/png",
+            ),
+        ),
+        content_kind="image",
     )
 
 
@@ -210,3 +285,93 @@ def test_summarizer_requires_api_key_only_when_real_client_is_needed(tmp_path, m
 
     with pytest.raises(ValueError, match="DEEPSEEK_API_KEY"):
         summarizer.summarize(1, make_detail())
+
+
+def test_summarizer_router_sends_text_details_to_text_summarizer(tmp_path):
+    prompt_dir = tmp_path / "prompts"
+    prompt_dir.mkdir()
+    (prompt_dir / "notice_summary_v1.md").write_text("系统提示词", encoding="utf-8")
+    text_client = _FakeClient()
+    kimi_client = _FakeKimiClient()
+    router = SummarizerRouter(
+        text_summarizer=NoticeSummarizer(
+            prompt_dir=prompt_dir,
+            prompt_name="notice_summary_v1",
+            model="deepseek-test",
+            client=text_client,
+        ),
+        kimi_summarizer=KimiMultimodalSummarizer(
+            prompt_dir=prompt_dir,
+            prompt_name="notice_summary_v1",
+            model="kimi-test",
+            client=kimi_client,
+            downloader=lambda asset: tmp_path / "unused.bin",
+        ),
+        routing={"text": "deepseek", "pdf": "kimi", "image": "kimi"},
+    )
+
+    summary = router.summarize(7, make_detail(), source_name="上海大学官网")
+
+    assert summary.model == "deepseek-test"
+    assert text_client.chat.completions.last_request["model"] == "deepseek-test"
+    assert kimi_client.chat.completions.last_request is None
+
+
+def test_kimi_pdf_summarizer_extracts_file_content_before_chat(tmp_path):
+    prompt_dir = tmp_path / "prompts"
+    prompt_dir.mkdir()
+    (prompt_dir / "notice_summary_v1.md").write_text("系统提示词", encoding="utf-8")
+    pdf_path = tmp_path / "notice.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 fake")
+    fake_client = _FakeKimiClient(extracted_text="巡察公告 PDF 正文")
+    summarizer = KimiMultimodalSummarizer(
+        prompt_dir=prompt_dir,
+        prompt_name="notice_summary_v1",
+        model="kimi-k2.7-code",
+        client=fake_client,
+        downloader=lambda asset: pdf_path,
+    )
+
+    summary = summarizer.summarize(8, make_pdf_detail(), source_name="上海大学管理学院")
+
+    assert summary.notice_id == 8
+    assert summary.model == "kimi-k2.7-code"
+    assert fake_client.files.create_requests == [{"file": pdf_path, "purpose": "file-extract"}]
+    assert fake_client.files.content_requests == [{"file_id": "file-test-1"}]
+    assert fake_client.files.delete_requests == [{"file_id": "file-test-1"}]
+    request = fake_client.chat.completions.last_request
+    assert request["model"] == "kimi-k2.7-code"
+    assert request["messages"][0] == {"role": "system", "content": "系统提示词"}
+    assert request["messages"][1] == {"role": "system", "content": "巡察公告 PDF 正文"}
+    assert "巡察公告" in request["messages"][2]["content"]
+    assert "正文：巡察公告 PDF 正文" not in request["messages"][2]["content"]
+    assert "temperature" not in request
+    assert "thinking" not in request
+
+
+def test_kimi_image_summarizer_sends_openai_compatible_image_message(tmp_path):
+    prompt_dir = tmp_path / "prompts"
+    prompt_dir.mkdir()
+    (prompt_dir / "notice_summary_v1.md").write_text("系统提示词", encoding="utf-8")
+    image_path = tmp_path / "notice.png"
+    image_path.write_bytes(b"fake image bytes")
+    fake_client = _FakeKimiClient()
+    summarizer = KimiMultimodalSummarizer(
+        prompt_dir=prompt_dir,
+        prompt_name="notice_summary_v1",
+        model="kimi-k2.7-code",
+        client=fake_client,
+        downloader=lambda asset: image_path,
+    )
+
+    summarizer.summarize(9, make_image_detail(), source_name="上海大学管理学院")
+
+    request = fake_client.chat.completions.last_request
+    content = request["messages"][1]["content"]
+    assert isinstance(content, list)
+    assert content[0]["type"] == "image_url"
+    assert content[0]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert content[1]["type"] == "text"
+    assert "管理学院2026年寒假值班安排" in content[1]["text"]
+    assert "temperature" not in request
+    assert "thinking" not in request
