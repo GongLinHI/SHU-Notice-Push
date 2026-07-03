@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup
 
-from src.notice_push.html_utils import absolute_url, clean_text, extract_text_blocks, parse_date, select_main_content
+from src.notice_push.html_utils import clean_text, extract_assets, extract_text_blocks, infer_content_kind, parse_date, promote_primary_assets, select_main_content
 from src.notice_push.models import Attachment, NoticeDetail, NoticeListItem
 from src.notice_push.sources.base import NoticeSourceAdapter
 
@@ -36,7 +36,10 @@ class GraduateSchoolAdapter(NoticeSourceAdapter):
         content_node = select_main_content(soup, ["#vsb_content .v_news_content", ".v_news_content"])
         body_text = clean_text(soup.get_text(" ", strip=True))
         content = extract_text_blocks(content_node) if content_node else ""
-        attachments = self._extract_attachments(content_node, item.url) if content_node else ()
+        assets = extract_assets(content_node, item.url) if content_node else ()
+        content_kind = infer_content_kind(content, assets)
+        assets = promote_primary_assets(content_kind, assets)
+        attachments = self._attachments_from_assets(assets)
         return NoticeDetail(
             source_id=item.source_id,
             url=item.url,
@@ -46,15 +49,13 @@ class GraduateSchoolAdapter(NoticeSourceAdapter):
             list_excerpt=item.list_excerpt,
             content=content,
             attachments=attachments,
+            assets=assets,
+            content_kind=content_kind,
         )
 
-    def _extract_attachments(self, content_node: Tag, page_url: str) -> tuple[Attachment, ...]:
-        attachments: list[Attachment] = []
-        for anchor in content_node.find_all("a", href=True):
-            href = anchor.get("href", "")
-            text = clean_text(anchor.get_text(" ", strip=True))
-            lower = href.lower()
-            if "附件" not in text and not lower.endswith((".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".rar")):
-                continue
-            attachments.append(Attachment(name=text, url=absolute_url(href, page_url)))
-        return tuple(attachments)
+    def _attachments_from_assets(self, assets) -> tuple[Attachment, ...]:
+        return tuple(
+            Attachment(name=asset.name, url=asset.url)
+            for asset in assets
+            if asset.kind in {"pdf", "file"}
+        )

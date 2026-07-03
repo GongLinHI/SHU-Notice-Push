@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from bs4 import BeautifulSoup
 
-from src.notice_push.html_utils import clean_text, extract_text_blocks, parse_date, select_main_content
+from src.notice_push.html_utils import clean_text, extract_assets, extract_text_blocks, infer_content_kind, parse_date, promote_primary_assets, select_main_content
 from src.notice_push.models import NoticeDetail, NoticeListItem
 from src.notice_push.sources.base import NoticeSourceAdapter
 
@@ -42,6 +42,9 @@ class ManagementSchoolAdapter(NoticeSourceAdapter):
         content_node = select_main_content(soup, [".v_news_content"])
         body_text = clean_text(soup.get_text(" ", strip=True))
         content = extract_text_blocks(content_node) if content_node else ""
+        assets = extract_assets(content_node, item.url) if content_node else ()
+        content_kind = infer_content_kind(content, assets)
+        assets = promote_primary_assets(content_kind, assets)
         return NoticeDetail(
             source_id=item.source_id,
             url=item.url,
@@ -50,4 +53,6 @@ class ManagementSchoolAdapter(NoticeSourceAdapter):
             published_at=parse_date(body_text) or item.published_at,
             list_excerpt=item.list_excerpt,
             content=content,
+            assets=assets,
+            content_kind=content_kind,
         )

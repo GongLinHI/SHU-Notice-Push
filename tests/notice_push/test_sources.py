@@ -46,6 +46,44 @@ def test_management_school_adapter_parses_table_list_next_page_and_detail(tmp_pa
     assert "创建时间" not in detail.content
 
 
+def test_management_school_adapter_extracts_pdf_body_asset(tmp_path):
+    source = load_config(env={}, repo_root=tmp_path).source_by_id("management_school")
+    adapter = ManagementSchoolAdapter(source)
+    item = NoticeListItem(
+        source_id=source.id,
+        url="https://ms.shu.edu.cn/info/1245/91745.htm",
+        canonical_url="https://ms.shu.edu.cn/info/1245/91745.htm",
+        title="巡察公告",
+    )
+
+    detail = adapter.parse_detail(read_fixture("management_school_pdf_detail.html"), item)
+
+    assert detail.content_kind == "pdf"
+    assert detail.assets[0].kind == "pdf"
+    assert detail.assets[0].role == "primary"
+    assert detail.assets[0].name == "巡察公告.pdf"
+    assert detail.assets[0].url == "https://ms.shu.edu.cn/__local/inspection.pdf"
+
+
+def test_management_school_adapter_extracts_image_body_asset(tmp_path):
+    source = load_config(env={}, repo_root=tmp_path).source_by_id("management_school")
+    adapter = ManagementSchoolAdapter(source)
+    item = NoticeListItem(
+        source_id=source.id,
+        url="https://ms.shu.edu.cn/info/1245/91475.htm",
+        canonical_url="https://ms.shu.edu.cn/info/1245/91475.htm",
+        title="管理学院2026年寒假值班安排",
+    )
+
+    detail = adapter.parse_detail(read_fixture("management_school_image_detail.html"), item)
+
+    assert detail.content_kind == "image"
+    assert detail.assets[0].kind == "image"
+    assert detail.assets[0].role == "primary"
+    assert detail.assets[0].name == "值班安排.png"
+    assert detail.assets[0].url == "https://ms.shu.edu.cn/__local/duty.png"
+
+
 def test_graduate_school_adapter_parses_row_list_next_page_detail_and_attachment(tmp_path):
     source = load_config(env={}, repo_root=tmp_path).source_by_id("graduate_school")
     adapter = GraduateSchoolAdapter(source)
@@ -62,6 +100,8 @@ def test_graduate_school_adapter_parses_row_list_next_page_detail_and_attachment
     assert "国家教学成果奖参评资格" in detail.content
     assert detail.attachments[0].name == "附件【2026年上海大学高等教育（研究生）国家教学成果奖.pdf】"
     assert detail.attachments[0].url == "https://gs.shu.edu.cn/__local/1/2026.pdf"
+    assert detail.assets[0].kind == "pdf"
+    assert detail.assets[0].url == "https://gs.shu.edu.cn/__local/1/2026.pdf"
 
 
 def test_source_adapters_fallback_to_generic_article_content(tmp_path):
