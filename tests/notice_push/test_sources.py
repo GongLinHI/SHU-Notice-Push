@@ -65,6 +65,24 @@ def test_management_school_adapter_extracts_pdf_body_asset(tmp_path):
     assert detail.assets[0].url == "https://ms.shu.edu.cn/__local/inspection.pdf"
 
 
+def test_management_school_adapter_extracts_pdfjs_iframe_body_asset(tmp_path):
+    source = load_config(env={}, repo_root=tmp_path).source_by_id("management_school")
+    adapter = ManagementSchoolAdapter(source)
+    item = NoticeListItem(
+        source_id=source.id,
+        url="https://ms.shu.edu.cn/info/1245/91745.htm",
+        canonical_url="https://ms.shu.edu.cn/info/1245/91745.htm",
+        title="巡察公告",
+    )
+
+    detail = adapter.parse_detail(read_fixture("management_school_pdfjs_detail.html"), item)
+
+    assert detail.content_kind == "pdf"
+    assert detail.assets[0].kind == "pdf"
+    assert detail.assets[0].role == "primary"
+    assert detail.assets[0].url == "https://ms.shu.edu.cn/__local/2/23/64/inspection.pdf"
+
+
 def test_management_school_adapter_extracts_image_body_asset(tmp_path):
     source = load_config(env={}, repo_root=tmp_path).source_by_id("management_school")
     adapter = ManagementSchoolAdapter(source)
@@ -82,6 +100,57 @@ def test_management_school_adapter_extracts_image_body_asset(tmp_path):
     assert detail.assets[0].role == "primary"
     assert detail.assets[0].name == "值班安排.png"
     assert detail.assets[0].url == "https://ms.shu.edu.cn/__local/duty.png"
+
+
+def test_graduate_school_adapter_extracts_pdfjs_script_body_asset(tmp_path):
+    source = load_config(env={}, repo_root=tmp_path).source_by_id("graduate_school")
+    adapter = GraduateSchoolAdapter(source)
+    item = NoticeListItem(
+        source_id=source.id,
+        url="https://gs.shu.edu.cn/info/1029/172562.htm",
+        canonical_url="https://gs.shu.edu.cn/info/1029/172562.htm",
+        title="第二届全国教材建设奖推荐申报公示",
+    )
+
+    detail = adapter.parse_detail(read_fixture("graduate_school_pdfjs_script_detail.html"), item)
+
+    assert detail.content_kind == "pdf"
+    assert detail.assets[0].kind == "pdf"
+    assert detail.assets[0].role == "primary"
+    assert detail.assets[0].url == "https://gs.shu.edu.cn/__local/C/DC/99/textbook.pdf"
+    assert all("unrelated-form.pdf" not in asset.url for asset in detail.assets)
+
+
+def test_graduate_school_adapter_extracts_external_video_asset(tmp_path):
+    source = load_config(env={}, repo_root=tmp_path).source_by_id("graduate_school")
+    adapter = GraduateSchoolAdapter(source)
+    item = NoticeListItem(
+        source_id=source.id,
+        url="https://www.kankanews.com/detail/dZ2e81vaawR",
+        canonical_url="https://www.kankanews.com/detail/dZ2e81vaawR",
+        title="卓越工程师学院承办上海市工程硕博士培养改革2026年招生工作校企对接会",
+    )
+
+    detail = adapter.parse_detail(read_fixture("kankanews_video_detail.html"), item)
+
+    assert detail.content_kind == "video"
+    assert detail.assets == ()
+
+
+def test_graduate_school_adapter_marks_kankanews_static_detail_as_external_video(tmp_path):
+    source = load_config(env={}, repo_root=tmp_path).source_by_id("graduate_school")
+    adapter = GraduateSchoolAdapter(source)
+    item = NoticeListItem(
+        source_id=source.id,
+        url="https://www.kankanews.com/detail/dZ2e81vaawR",
+        canonical_url="https://www.kankanews.com/detail/dZ2e81vaawR",
+        title="卓越工程师学院承办上海市工程硕博士培养改革2026年招生工作校企对接会",
+    )
+
+    detail = adapter.parse_detail(read_fixture("kankanews_static_video_detail.html"), item)
+
+    assert detail.content_kind == "video"
+    assert detail.assets == ()
 
 
 def test_graduate_school_adapter_parses_row_list_next_page_detail_and_attachment(tmp_path):

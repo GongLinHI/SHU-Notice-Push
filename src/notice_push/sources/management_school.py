@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from bs4 import BeautifulSoup
 
-from src.notice_push.html_utils import clean_text, extract_assets, extract_text_blocks, infer_content_kind, parse_date, promote_primary_assets, select_main_content
+from src.notice_push.html_utils import clean_text, extract_detail_assets, extract_text_blocks, infer_content_kind, parse_date, promote_primary_assets, select_main_content
 from src.notice_push.models import NoticeDetail, NoticeListItem
 from src.notice_push.sources.base import NoticeSourceAdapter
 
@@ -41,8 +41,8 @@ class ManagementSchoolAdapter(NoticeSourceAdapter):
         title_node = soup.select_one("#HRCMS_ctr13929_CalendarDetail_lblTitle")
         content_node = select_main_content(soup, [".v_news_content"])
         body_text = clean_text(soup.get_text(" ", strip=True))
+        assets = extract_detail_assets(content_node, soup, item.url)
         content = extract_text_blocks(content_node) if content_node else ""
-        assets = extract_assets(content_node, item.url) if content_node else ()
         content_kind = infer_content_kind(content, assets)
         assets = promote_primary_assets(content_kind, assets)
         return NoticeDetail(

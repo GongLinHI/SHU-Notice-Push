@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from pathlib import PurePosixPath
 from typing import Optional
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 from bs4 import Tag
 
@@ -63,6 +63,10 @@ def remove_noise_nodes(root: Tag) -> None:
 def has_content_signal(root: Tag) -> bool:
     if clean_text(root.get_text(" ", strip=True)):
         return True
+    for script in root.find_all("script"):
+        script_text = script.string or script.get_text("", strip=False)
+        if "showVsbpdfIframe" in script_text:
+            return True
     return root.select_one("img[src], video, source[src], iframe[src]") is not None
 
 
@@ -106,7 +110,14 @@ def extract_assets(root: Tag, page_url: str) -> tuple[NoticeAsset, ...]:
     assets.extend(extract_link_assets(root, page_url))
     assets.extend(extract_image_assets(root, page_url))
     assets.extend(extract_video_assets(root, page_url))
+    assets.extend(extract_pdfjs_assets(root, page_url))
     return tuple(_dedupe_assets(assets))
+
+
+def extract_detail_assets(content_node: Tag | None, soup, page_url: str) -> tuple[NoticeAsset, ...]:
+    if content_node is None:
+        return extract_assets(soup, page_url)
+    return extract_assets(content_node, page_url)
 
 
 def extract_link_assets(root: Tag, page_url: str) -> list[NoticeAsset]:
@@ -117,17 +128,6 @@ def extract_link_assets(root: Tag, page_url: str) -> list[NoticeAsset]:
         absolute = absolute_url(href, page_url)
         lower_path = urlparse(absolute).path.lower()
         suffix = PurePosixPath(lower_path).suffix
-        if _is_external_video_url(absolute):
-            assets.append(
-                NoticeAsset(
-                    kind="external_video",
-                    role="primary",
-                    name=text or _filename_from_url(absolute) or absolute,
-                    url=absolute,
-                    mime_type="text/html",
-                )
-            )
-            continue
         if suffix in VIDEO_EXTENSIONS:
             assets.append(
                 NoticeAsset(
@@ -210,13 +210,49 @@ def extract_video_assets(root: Tag, page_url: str) -> list[NoticeAsset]:
     return assets
 
 
+def extract_pdfjs_assets(root: Tag, page_url: str) -> list[NoticeAsset]:
+    assets: list[NoticeAsset] = []
+    for node in root.find_all(["iframe", "embed", "object"]):
+        raw_url = node.get("src") or node.get("data") or ""
+        pdf_url = _pdf_url_from_pdfjs_viewer(raw_url)
+        if not pdf_url:
+            continue
+        absolute = absolute_url(pdf_url, page_url)
+        assets.append(
+            NoticeAsset(
+                kind="pdf",
+                role="attachment",
+                name=_filename_from_url(absolute),
+                url=absolute,
+                mime_type="application/pdf",
+            )
+        )
+
+    for script in root.find_all("script"):
+        script_text = script.string or script.get_text("", strip=False)
+        for raw_url in re.findall(r"showVsbpdfIframe\(\s*['\"]([^'\"]+\.pdf)['\"]", script_text, re.I):
+            absolute = absolute_url(unquote(raw_url), page_url)
+            assets.append(
+                NoticeAsset(
+                    kind="pdf",
+                    role="attachment",
+                    name=_filename_from_url(absolute),
+                    url=absolute,
+                    mime_type="application/pdf",
+                )
+            )
+    return assets
+
+
 def infer_content_kind(content: str, assets: tuple[NoticeAsset, ...]) -> str:
     substantive_text = clean_text(content)
     asset_names = {clean_text(asset.name) for asset in assets if clean_text(asset.name)}
     text_is_only_asset_label = bool(substantive_text) and substantive_text in asset_names
+    kinds = {asset.kind for asset in assets}
+    if "video" in kinds or "external_video" in kinds:
+        return "video"
     if substantive_text and not text_is_only_asset_label:
         return "text"
-    kinds = {asset.kind for asset in assets}
     if "pdf" in kinds:
         return "pdf"
     if "image" in kinds:
@@ -224,6 +260,10 @@ def infer_content_kind(content: str, assets: tuple[NoticeAsset, ...]) -> str:
     if "video" in kinds or "external_video" in kinds:
         return "video"
     return "empty"
+
+
+def is_external_video_page(url: str) -> bool:
+    return _is_external_video_url(url)
 
 
 def promote_primary_assets(content_kind: str, assets: tuple[NoticeAsset, ...]) -> tuple[NoticeAsset, ...]:
@@ -261,6 +301,19 @@ def _filename_from_url(url: str) -> str:
 def _is_external_video_url(url: str) -> bool:
     hostname = (urlparse(url).hostname or "").lower()
     return any(hostname == domain or hostname.endswith(f".{domain}") for domain in EXTERNAL_VIDEO_DOMAINS)
+
+
+def _pdf_url_from_pdfjs_viewer(url: str) -> str:
+    if not url:
+        return ""
+    parsed = urlparse(url)
+    if "pdfjs" not in parsed.path.lower():
+        return ""
+    file_values = parse_qs(parsed.query).get("file", [])
+    if not file_values:
+        return ""
+    file_url = unquote(file_values[0])
+    return file_url if file_url.lower().endswith(".pdf") else ""
 
 
 def parse_date(text: str) -> Optional[datetime]:
