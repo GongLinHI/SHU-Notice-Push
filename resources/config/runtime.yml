@@ -1,6 +1,22 @@
 prompt_name: notice_summary_v1
-deepseek_model: deepseek-v4-flash
 detail_min_chars: 30
+
+llm:
+  providers:
+    deepseek:
+      base_url: https://api.deepseek.com
+      api_key_env: DEEPSEEK_API_KEY
+      model_env: DEEPSEEK_MODEL
+      default_model: deepseek-v4-flash
+    kimi:
+      base_url: https://api.moonshot.cn/v1
+      api_key_env: KIMI_API_KEY
+      model_env: KIMI_MODEL
+      default_model: kimi-k2.7-code
+  routing:
+    text: deepseek
+    pdf: kimi
+    image: kimi
 
 sources:
   shu_official:

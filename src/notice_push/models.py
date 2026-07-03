@@ -115,12 +115,23 @@ class NoticeRuntimeProfile:
 
 
 @dataclass(frozen=True)
+class LLMProviderConfig:
+    name: str
+    base_url: str
+    api_key_env: str
+    model_env: str
+    default_model: str
+
+
+@dataclass(frozen=True)
 class AppConfig:
     repo_root: Path
     state_path: Path
     output_dir: Path
     prompt_name: str
     deepseek_model: str
+    llm_providers: dict[str, LLMProviderConfig]
+    llm_routing: dict[str, str]
     detail_min_chars: int
     runtime_profiles: dict[str, NoticeRuntimeProfile]
     sources: tuple[NoticeSource, ...]

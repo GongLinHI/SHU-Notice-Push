@@ -7,7 +7,7 @@ from typing import Any, Mapping, Optional
 from dotenv import load_dotenv
 import yaml
 
-from src.notice_push.models import AppConfig, NoticeRuntimeProfile, NoticeSource
+from src.notice_push.models import AppConfig, LLMProviderConfig, NoticeRuntimeProfile, NoticeSource
 
 
 PROFILE_DEFAULTS: dict[str, dict[str, Any]] = {
@@ -68,6 +68,21 @@ INT_PROFILE_KEYS = {
 }
 FLOAT_PROFILE_KEYS = {"http_initial_retry_delay", "llm_initial_retry_delay", "llm_retry_backoff"}
 BOOL_PROFILE_KEYS = {"retry_failed", "refresh_seen_details"}
+DEFAULT_LLM_PROVIDERS: dict[str, dict[str, str]] = {
+    "deepseek": {
+        "base_url": "https://api.deepseek.com",
+        "api_key_env": "DEEPSEEK_API_KEY",
+        "model_env": "DEEPSEEK_MODEL",
+        "default_model": "deepseek-v4-flash",
+    },
+    "kimi": {
+        "base_url": "https://api.moonshot.cn/v1",
+        "api_key_env": "KIMI_API_KEY",
+        "model_env": "KIMI_MODEL",
+        "default_model": "kimi-k2.7-code",
+    },
+}
+DEFAULT_LLM_ROUTING = {"text": "deepseek", "pdf": "kimi", "image": "kimi"}
 
 
 def _repo_root() -> Path:
@@ -220,6 +235,43 @@ def _profile_value(yaml_config: Mapping[str, Any], profile_name: str, key: str, 
     return raw
 
 
+def _llm_providers(yaml_config: Mapping[str, Any], env: Mapping[str, str]) -> dict[str, LLMProviderConfig]:
+    yaml_providers = _yaml_value(yaml_config, "llm", "providers", default={}) or {}
+    if not isinstance(yaml_providers, Mapping):
+        raise ValueError("Runtime config 'llm.providers' must be a mapping")
+
+    provider_ids = list(DEFAULT_LLM_PROVIDERS)
+    provider_ids.extend(provider_id for provider_id in yaml_providers if provider_id not in DEFAULT_LLM_PROVIDERS)
+
+    providers: dict[str, LLMProviderConfig] = {}
+    for provider_id in provider_ids:
+        provider_config = yaml_providers.get(provider_id) or {}
+        if not isinstance(provider_config, Mapping):
+            raise ValueError(f"LLM provider '{provider_id}' config must be a mapping")
+        defaults = DEFAULT_LLM_PROVIDERS.get(provider_id, {})
+        model_env = str(provider_config.get("model_env", defaults.get("model_env", f"{provider_id.upper()}_MODEL")))
+        default_model = str(provider_config.get("default_model", defaults.get("default_model", "")))
+        if provider_id == "deepseek" and "deepseek_model" in yaml_config and "default_model" not in provider_config:
+            default_model = str(yaml_config["deepseek_model"])
+        providers[provider_id] = LLMProviderConfig(
+            name=provider_id,
+            base_url=str(provider_config.get("base_url", defaults.get("base_url", ""))),
+            api_key_env=str(provider_config.get("api_key_env", defaults.get("api_key_env", f"{provider_id.upper()}_API_KEY"))),
+            model_env=model_env,
+            default_model=env.get(model_env, default_model),
+        )
+    return providers
+
+
+def _llm_routing(yaml_config: Mapping[str, Any]) -> dict[str, str]:
+    routing = dict(DEFAULT_LLM_ROUTING)
+    yaml_routing = _yaml_value(yaml_config, "llm", "routing", default={}) or {}
+    if not isinstance(yaml_routing, Mapping):
+        raise ValueError("Runtime config 'llm.routing' must be a mapping")
+    routing.update({str(key): str(value) for key, value in yaml_routing.items()})
+    return routing
+
+
 def load_config(
     env: Optional[Mapping[str, str]] = None,
     repo_root: Optional[Path] = None,
@@ -235,16 +287,16 @@ def load_config(
 
     resolved_state_path = state_path or root / "resources" / "notice_state.sqlite3"
     resolved_output_dir = output_dir or root / "resources" / "results"
+    llm_providers = _llm_providers(yaml_config, env)
 
     return AppConfig(
         repo_root=root,
         state_path=Path(resolved_state_path),
         output_dir=Path(resolved_output_dir),
         prompt_name=str(_yaml_value(yaml_config, "prompt_name", default="notice_summary_v1")),
-        deepseek_model=env.get(
-            "DEEPSEEK_MODEL",
-            str(_yaml_value(yaml_config, "deepseek_model", default="deepseek-v4-flash")),
-        ),
+        deepseek_model=llm_providers["deepseek"].default_model,
+        llm_providers=llm_providers,
+        llm_routing=_llm_routing(yaml_config),
         detail_min_chars=int(_yaml_value(yaml_config, "detail_min_chars", default=30)),
         runtime_profiles=_runtime_profiles(yaml_config),
         sources=_default_sources(yaml_config),

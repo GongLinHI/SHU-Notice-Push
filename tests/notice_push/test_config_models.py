@@ -15,6 +15,15 @@ def test_load_config_uses_defaults_and_repo_relative_paths(tmp_path):
     assert config.output_dir == tmp_path / "resources" / "results"
     assert config.prompt_name == "notice_summary_v1"
     assert config.deepseek_model == "deepseek-v4-flash"
+    assert config.llm_providers["deepseek"].base_url == "https://api.deepseek.com"
+    assert config.llm_providers["deepseek"].api_key_env == "DEEPSEEK_API_KEY"
+    assert config.llm_providers["deepseek"].model_env == "DEEPSEEK_MODEL"
+    assert config.llm_providers["deepseek"].default_model == "deepseek-v4-flash"
+    assert config.llm_providers["kimi"].base_url == "https://api.moonshot.cn/v1"
+    assert config.llm_providers["kimi"].api_key_env == "KIMI_API_KEY"
+    assert config.llm_providers["kimi"].model_env == "KIMI_MODEL"
+    assert config.llm_providers["kimi"].default_model == "kimi-k2.7-code"
+    assert config.llm_routing == {"text": "deepseek", "pdf": "kimi", "image": "kimi"}
     assert config.detail_min_chars == 30
     assert config.runtime_profiles["daily"] == NoticeRuntimeProfile(
         name="daily",
@@ -191,6 +200,52 @@ def test_load_config_reads_profile_values_from_yaml_not_environment(tmp_path):
         llm_initial_retry_delay=1.7,
         llm_retry_backoff=3.0,
     )
+
+
+def test_load_config_reads_llm_provider_values_from_yaml(tmp_path):
+    config_dir = tmp_path / "resources" / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "runtime.yml").write_text(
+        "\n".join(
+            [
+                "llm:",
+                "  providers:",
+                "    deepseek:",
+                "      base_url: https://deepseek.example/v1",
+                "      api_key_env: CUSTOM_DEEPSEEK_KEY",
+                "      model_env: CUSTOM_DEEPSEEK_MODEL",
+                "      default_model: deepseek-test",
+                "    kimi:",
+                "      base_url: https://kimi.example/v1",
+                "      api_key_env: CUSTOM_KIMI_KEY",
+                "      model_env: CUSTOM_KIMI_MODEL",
+                "      default_model: kimi-test",
+                "  routing:",
+                "    text: deepseek",
+                "    pdf: kimi",
+                "    image: kimi",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(
+        env={
+            "CUSTOM_DEEPSEEK_MODEL": "deepseek-env",
+            "CUSTOM_KIMI_MODEL": "kimi-env",
+        },
+        repo_root=tmp_path,
+    )
+
+    assert config.llm_providers["deepseek"].base_url == "https://deepseek.example/v1"
+    assert config.llm_providers["deepseek"].model_env == "CUSTOM_DEEPSEEK_MODEL"
+    assert config.llm_providers["deepseek"].default_model == "deepseek-env"
+    assert config.llm_providers["kimi"].base_url == "https://kimi.example/v1"
+    assert config.llm_providers["kimi"].model_env == "CUSTOM_KIMI_MODEL"
+    assert config.llm_providers["kimi"].default_model == "kimi-env"
+    assert config.llm_routing["text"] == "deepseek"
+    assert config.llm_routing["pdf"] == "kimi"
+    assert config.llm_routing["image"] == "kimi"
 
 
 def test_load_config_reads_runtime_values_from_yaml(tmp_path):
