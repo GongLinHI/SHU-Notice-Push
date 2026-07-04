@@ -7,7 +7,7 @@ from typing import Optional
 
 from src.notice_push.config import load_config
 from src.notice_push.http import HttpClient
-from src.notice_push.llm import resolve_provider
+from src.notice_push.llm import resolve_optional_provider, resolve_provider
 from src.notice_push.models import NoticeRuntimeProfile
 from src.notice_push.pipeline import NoticePipeline
 from src.notice_push.storage import NoticeStorage
@@ -46,7 +46,7 @@ def build_pipeline(config, profile: NoticeRuntimeProfile) -> NoticePipeline:
         initial_retry_delay=profile.http_initial_retry_delay,
     )
     deepseek_provider = resolve_provider("deepseek", config.llm_providers["deepseek"])
-    kimi_provider = resolve_provider("kimi", config.llm_providers["kimi"])
+    kimi_provider = resolve_optional_provider("kimi", config.llm_providers["kimi"])
     text_summarizer = NoticeSummarizer(
         prompt_dir=config.repo_root / "resources" / "prompts",
         prompt_name=config.prompt_name,

@@ -34,5 +34,19 @@ def resolve_provider(
     )
 
 
+def resolve_optional_provider(
+    name: str,
+    config: LLMProviderConfig,
+    env: dict[str, str] | None = None,
+) -> ResolvedLLMProvider:
+    active_env = env or os.environ
+    return ResolvedLLMProvider(
+        name=name,
+        base_url=config.base_url,
+        api_key=active_env.get(config.api_key_env, ""),
+        model=active_env.get(config.model_env, config.default_model),
+    )
+
+
 def create_openai_client(provider: ResolvedLLMProvider) -> OpenAI:
     return OpenAI(api_key=provider.api_key, base_url=provider.base_url)

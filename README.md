@@ -52,7 +52,7 @@ environment: Ubuntu-Python
 | --- | --- |
 | `DEEPSEEK_API_KEY` | DeepSeek API Key，用于文本通知摘要 |
 | `DEEPSEEK_MODEL` | 可选，文本摘要模型名，默认 `deepseek-v4-flash` |
-| `KIMI_API_KEY` | Kimi API Key，用于 PDF 和图片正文摘要 |
+| `KIMI_API_KEY` | 可选但推荐，Kimi API Key；仅在需要摘要 PDF 或图片正文时使用 |
 | `KIMI_MODEL` | 可选，多模态摘要模型名，默认 `kimi-k2.7-code` |
 | `MAIL_SERVER_ADDRESS` | SMTP 服务器 |
 | `MAIL_SERVER_PORT` | SMTP 端口 |
@@ -168,6 +168,7 @@ Copy-Item .env.example .env
 ```env
 DEEPSEEK_API_KEY=your_deepseek_api_key_here
 DEEPSEEK_MODEL=deepseek-v4-flash
+# 可选；PDF/图片正文摘要需要
 KIMI_API_KEY=your_kimi_api_key_here
 KIMI_MODEL=kimi-k2.7-code
 ```

@@ -231,3 +231,25 @@ def test_build_pipeline_constructs_router_from_llm_provider_config(monkeypatch, 
     assert kimi_summarizer.model == "kimi-unit"
     assert kimi_summarizer.api_key == "kimi-key"
     assert kimi_summarizer.base_url == "https://api.moonshot.cn/v1"
+
+
+def test_build_pipeline_allows_missing_kimi_key_until_multimodal_summary_is_needed(monkeypatch, tmp_path):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-key")
+    monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-unit")
+    monkeypatch.setenv("KIMI_MODEL", "kimi-unit")
+    monkeypatch.delenv("KIMI_API_KEY", raising=False)
+    config = load_config(
+        env={},
+        repo_root=tmp_path,
+        state_path=tmp_path / "state.sqlite3",
+        output_dir=tmp_path / "results",
+    )
+
+    pipeline = build_pipeline(config, config.runtime_profile("daily"))
+
+    assert isinstance(pipeline.summarizer, SummarizerRouter)
+    kimi_summarizer = pipeline.summarizer.provider_summarizers["kimi"]
+    assert isinstance(kimi_summarizer, KimiMultimodalSummarizer)
+    assert kimi_summarizer.model == "kimi-unit"
+    assert kimi_summarizer.api_key == ""
+    assert kimi_summarizer.base_url == "https://api.moonshot.cn/v1"
