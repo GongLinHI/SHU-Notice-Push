@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import PurePosixPath
 from typing import Optional
@@ -43,8 +44,17 @@ VIDEO_EXTENSIONS = {
     ".mov": "video/quicktime",
     ".webm": "video/webm",
 }
-EXTERNAL_VIDEO_DOMAINS = ("kankanews.com",)
-NOISE_IMAGE_MARKERS = ("logo", "icon", "wx", "weixin", "qr", "blank", "spacer")
+DEFAULT_EXTERNAL_VIDEO_DOMAINS = ("kankanews.com",)
+DEFAULT_NOISE_IMAGE_MARKERS = ("logo", "icon", "wx", "weixin", "qr", "blank", "spacer")
+
+
+@dataclass(frozen=True)
+class ParsingRules:
+    external_video_domains: tuple[str, ...] = DEFAULT_EXTERNAL_VIDEO_DOMAINS
+    noise_image_markers: tuple[str, ...] = DEFAULT_NOISE_IMAGE_MARKERS
+
+
+DEFAULT_PARSING_RULES = ParsingRules()
 
 
 def absolute_url(href: str, base_url: str) -> str:
@@ -105,19 +115,24 @@ def select_main_content(soup, selectors: list[str]) -> Tag | None:
     return None
 
 
-def extract_assets(root: Tag, page_url: str) -> tuple[NoticeAsset, ...]:
+def extract_assets(root: Tag, page_url: str, rules: ParsingRules = DEFAULT_PARSING_RULES) -> tuple[NoticeAsset, ...]:
     assets: list[NoticeAsset] = []
     assets.extend(extract_link_assets(root, page_url))
-    assets.extend(extract_image_assets(root, page_url))
-    assets.extend(extract_video_assets(root, page_url))
+    assets.extend(extract_image_assets(root, page_url, rules=rules))
+    assets.extend(extract_video_assets(root, page_url, rules=rules))
     assets.extend(extract_pdfjs_assets(root, page_url))
     return tuple(_dedupe_assets(assets))
 
 
-def extract_detail_assets(content_node: Tag | None, soup, page_url: str) -> tuple[NoticeAsset, ...]:
+def extract_detail_assets(
+    content_node: Tag | None,
+    soup,
+    page_url: str,
+    rules: ParsingRules = DEFAULT_PARSING_RULES,
+) -> tuple[NoticeAsset, ...]:
     if content_node is None:
-        return extract_assets(soup, page_url)
-    return extract_assets(content_node, page_url)
+        return extract_assets(soup, page_url, rules=rules)
+    return extract_assets(content_node, page_url, rules=rules)
 
 
 def extract_link_assets(root: Tag, page_url: str) -> list[NoticeAsset]:
@@ -154,13 +169,13 @@ def extract_link_assets(root: Tag, page_url: str) -> list[NoticeAsset]:
     return assets
 
 
-def extract_image_assets(root: Tag, page_url: str) -> list[NoticeAsset]:
+def extract_image_assets(root: Tag, page_url: str, rules: ParsingRules = DEFAULT_PARSING_RULES) -> list[NoticeAsset]:
     assets: list[NoticeAsset] = []
     for image in root.find_all("img", src=True):
         src = image.get("src", "")
         absolute = absolute_url(src, page_url)
         lower_url = absolute.lower()
-        if any(marker in lower_url for marker in NOISE_IMAGE_MARKERS):
+        if any(marker in lower_url for marker in rules.noise_image_markers):
             continue
         suffix = PurePosixPath(urlparse(absolute).path.lower()).suffix
         mime_type = IMAGE_EXTENSIONS.get(suffix, "")
@@ -179,12 +194,12 @@ def extract_image_assets(root: Tag, page_url: str) -> list[NoticeAsset]:
     return assets
 
 
-def extract_video_assets(root: Tag, page_url: str) -> list[NoticeAsset]:
+def extract_video_assets(root: Tag, page_url: str, rules: ParsingRules = DEFAULT_PARSING_RULES) -> list[NoticeAsset]:
     assets: list[NoticeAsset] = []
     for node in root.find_all(["video", "source", "iframe"], src=True):
         src = node.get("src", "")
         absolute = absolute_url(src, page_url)
-        if _is_external_video_url(absolute):
+        if _is_external_video_url(absolute, rules):
             assets.append(
                 NoticeAsset(
                     kind="external_video",
@@ -249,8 +264,6 @@ def infer_content_kind(content: str, assets: tuple[NoticeAsset, ...]) -> str:
     asset_names = {clean_text(asset.name) for asset in assets if clean_text(asset.name)}
     text_is_only_asset_label = bool(substantive_text) and substantive_text in asset_names
     kinds = {asset.kind for asset in assets}
-    if "video" in kinds or "external_video" in kinds:
-        return "video"
     if substantive_text and not text_is_only_asset_label:
         return "text"
     if "pdf" in kinds:
@@ -262,8 +275,8 @@ def infer_content_kind(content: str, assets: tuple[NoticeAsset, ...]) -> str:
     return "empty"
 
 
-def is_external_video_page(url: str) -> bool:
-    return _is_external_video_url(url)
+def is_external_video_page(url: str, rules: ParsingRules = DEFAULT_PARSING_RULES) -> bool:
+    return _is_external_video_url(url, rules)
 
 
 def promote_primary_assets(content_kind: str, assets: tuple[NoticeAsset, ...]) -> tuple[NoticeAsset, ...]:
@@ -298,9 +311,9 @@ def _filename_from_url(url: str) -> str:
     return PurePosixPath(urlparse(url).path).name
 
 
-def _is_external_video_url(url: str) -> bool:
+def _is_external_video_url(url: str, rules: ParsingRules) -> bool:
     hostname = (urlparse(url).hostname or "").lower()
-    return any(hostname == domain or hostname.endswith(f".{domain}") for domain in EXTERNAL_VIDEO_DOMAINS)
+    return any(hostname == domain or hostname.endswith(f".{domain}") for domain in rules.external_video_domains)
 
 
 def _pdf_url_from_pdfjs_viewer(url: str) -> str:

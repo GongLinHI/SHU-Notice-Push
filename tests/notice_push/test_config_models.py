@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from src.notice_push.config import load_config
-from src.notice_push.models import NoticeListItem, NoticeRuntimeProfile, NoticeSource
+from src.notice_push.models import NoticeListItem, NoticeRuntimeProfile, NoticeSource, ParsingConfig
 
 
 def test_load_config_uses_defaults_and_repo_relative_paths(tmp_path):
@@ -14,7 +14,7 @@ def test_load_config_uses_defaults_and_repo_relative_paths(tmp_path):
     assert config.state_path == tmp_path / "resources" / "notice_state.sqlite3"
     assert config.output_dir == tmp_path / "resources" / "results"
     assert config.prompt_name == "notice_summary_v1"
-    assert config.deepseek_model == "deepseek-v4-flash"
+    assert not hasattr(config, "deepseek_model")
     assert config.llm_providers["deepseek"].base_url == "https://api.deepseek.com"
     assert config.llm_providers["deepseek"].api_key_env == "DEEPSEEK_API_KEY"
     assert config.llm_providers["deepseek"].model_env == "DEEPSEEK_MODEL"
@@ -24,6 +24,10 @@ def test_load_config_uses_defaults_and_repo_relative_paths(tmp_path):
     assert config.llm_providers["kimi"].model_env == "KIMI_MODEL"
     assert config.llm_providers["kimi"].default_model == "kimi-k2.7-code"
     assert config.llm_routing == {"text": "deepseek", "pdf": "kimi", "image": "kimi"}
+    assert config.parsing == ParsingConfig(
+        external_video_domains=("kankanews.com",),
+        noise_image_markers=("logo", "icon", "wx", "weixin", "qr", "blank", "spacer"),
+    )
     assert config.detail_min_chars == 30
     assert config.runtime_profiles["daily"] == NoticeRuntimeProfile(
         name="daily",
@@ -96,7 +100,7 @@ def test_load_config_supports_path_and_model_env_override_only(tmp_path):
     assert config.state_path == state_path
     assert config.output_dir == output_dir
     assert config.prompt_name == "notice_summary_v1"
-    assert config.deepseek_model == "deepseek-v4-flash"
+    assert config.llm_providers["deepseek"].default_model == "deepseek-v4-flash"
     assert config.detail_min_chars == 30
     assert config.source_by_id("graduate_school").enabled is True
 
@@ -248,6 +252,45 @@ def test_load_config_reads_llm_provider_values_from_yaml(tmp_path):
     assert config.llm_routing["image"] == "kimi"
 
 
+def test_load_config_reads_parsing_values_from_yaml(tmp_path):
+    config_dir = tmp_path / "resources" / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "runtime.yml").write_text(
+        "\n".join(
+            [
+                "parsing:",
+                "  external_video_domains:",
+                "    - video.example.edu",
+                "  noise_image_markers:",
+                "    - tracking",
+                "    - spacer",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(env={}, repo_root=tmp_path)
+
+    assert config.parsing == ParsingConfig(
+        external_video_domains=("video.example.edu",),
+        noise_image_markers=("tracking", "spacer"),
+    )
+
+
+def test_load_config_ignores_legacy_top_level_deepseek_model(tmp_path):
+    config_dir = tmp_path / "resources" / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "runtime.yml").write_text(
+        "deepseek_model: legacy-deepseek-model\n",
+        encoding="utf-8",
+    )
+
+    config = load_config(env={}, repo_root=tmp_path)
+
+    assert not hasattr(config, "deepseek_model")
+    assert config.llm_providers["deepseek"].default_model == "deepseek-v4-flash"
+
+
 def test_load_config_reads_runtime_values_from_yaml(tmp_path):
     config_dir = tmp_path / "resources" / "config"
     config_dir.mkdir(parents=True)
@@ -255,8 +298,11 @@ def test_load_config_reads_runtime_values_from_yaml(tmp_path):
         "\n".join(
             [
                 "prompt_name: notice_summary_v3",
-                "deepseek_model: deepseek-v4-flash",
                 "detail_min_chars: 60",
+                "llm:",
+                "  providers:",
+                "    deepseek:",
+                "      default_model: deepseek-yaml",
                 "sources:",
                 "  custom_source:",
                 "    name: 自定义通知源",
@@ -300,7 +346,7 @@ def test_load_config_reads_runtime_values_from_yaml(tmp_path):
     )
 
     assert config.prompt_name == "notice_summary_v3"
-    assert config.deepseek_model == "deepseek-v4-flash"
+    assert config.llm_providers["deepseek"].default_model == "deepseek-yaml"
     assert config.detail_min_chars == 60
     assert config.source_by_id("custom_source") == NoticeSource(
         id="custom_source",

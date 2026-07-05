@@ -6,7 +6,8 @@ from collections import defaultdict
 from itertools import groupby
 from pathlib import Path
 
-from src.notice_push.models import FailedNotice, NoticeDetail, NoticeSummary
+from src.notice_push.models import FailedNotice, NoticeDetail, NoticeSummary, ReportStats
+from src.notice_push.resources import visible_notice_resources
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,7 @@ def render_report(
     report_date: date,
     entries: list[ReportEntry],
     failures: list[FailedNotice],
+    stats: ReportStats,
 ) -> str:
     lines: list[str] = []
     lines.extend(
@@ -28,9 +30,10 @@ def render_report(
             "## 运行概览",
             "",
             f"- 报告日期: {report_date.isoformat()}",
-            f"- 新增通知: {len(entries) + len(failures)}",
-            f"- 成功摘要: {len(entries)}",
-            f"- 需要人工复核: {len(failures)}",
+            f"- 新增通知: {stats.new_count}",
+            f"- 重试通知: {stats.retried_count}",
+            f"- 成功摘要: {stats.summarized_count}",
+            f"- 需要人工复核: {stats.manual_review_count}",
             "",
         ]
     )
@@ -40,7 +43,7 @@ def render_report(
         for source_name in sorted(source_stats):
             stats = source_stats[source_name]
             lines.append(
-                f"  - {source_name}: 新增 {stats['total']}，成功 {stats['summarized']}，失败 {stats['failed']}"
+                f"  - {source_name}: 处理 {stats['total']}，成功 {stats['summarized']}，失败 {stats['failed']}"
             )
         lines.append("")
 
@@ -50,11 +53,10 @@ def render_report(
         for entry in group:
             lines.append(entry.summary.markdown.rstrip())
             lines.append(f"- **原文链接**: [{entry.detail.title}]({entry.detail.url})")
-            if entry.detail.attachments:
-                attachment_links = "；".join(
-                    f"[{attachment.name}]({attachment.url})" for attachment in entry.detail.attachments
-                )
-                lines.append(f"- **附件**: {attachment_links}")
+            resources = visible_notice_resources(entry.detail)
+            if resources:
+                resource_links = "；".join(f"[{name}]({url})" for name, url in resources)
+                lines.append(f"- **附件**: {resource_links}")
             lines.append("")
 
     if failures:

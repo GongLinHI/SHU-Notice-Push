@@ -40,8 +40,10 @@ jobs:
           printf '%s\n' "$output" > "$RUNNER_TEMP/notice_pipeline.log"
 
           new_count=$(echo "$output" | awk -F= '/^new_count=/{print $2}' | tail -n1)
+          retried_count=$(echo "$output" | awk -F= '/^retried_count=/{print $2}' | tail -n1)
           summarized_count=$(echo "$output" | awk -F= '/^summarized_count=/{print $2}' | tail -n1)
           failed_count=$(echo "$output" | awk -F= '/^failed_count=/{print $2}' | tail -n1)
+          manual_review_count=$(echo "$output" | awk -F= '/^manual_review_count=/{print $2}' | tail -n1)
           source_error_count=$(echo "$output" | awk -F= '/^source_error_count=/{print $2}' | tail -n1)
 
           if [ "$exit_code" -ne 0 ] && [ "$exit_code" -ne 1 ]; then
@@ -54,8 +56,10 @@ jobs:
 
           echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
           echo "new_count=${new_count:-0}" >> "$GITHUB_OUTPUT"
+          echo "retried_count=${retried_count:-0}" >> "$GITHUB_OUTPUT"
           echo "summarized_count=${summarized_count:-0}" >> "$GITHUB_OUTPUT"
           echo "failed_count=${failed_count:-0}" >> "$GITHUB_OUTPUT"
+          echo "manual_review_count=${manual_review_count:-0}" >> "$GITHUB_OUTPUT"
           echo "source_error_count=${source_error_count:-0}" >> "$GITHUB_OUTPUT"
           echo "log_path=$RUNNER_TEMP/notice_pipeline.log" >> "$GITHUB_OUTPUT"
           exit 0
@@ -145,8 +149,10 @@ jobs:
             --metadata=title:上海大学通知汇总 \
             --metadata=report_date:${{ steps.date.outputs.date }} \
             --metadata=new_count:${{ steps.run_python_script.outputs.new_count }} \
+            --metadata=retried_count:${{ steps.run_python_script.outputs.retried_count }} \
             --metadata=summarized_count:${{ steps.run_python_script.outputs.summarized_count }} \
             --metadata=failed_count:${{ steps.run_python_script.outputs.failed_count }} \
+            --metadata=manual_review_count:${{ steps.run_python_script.outputs.manual_review_count }} \
             -o resources/results/html/${{ steps.date.outputs.date }}.html
 
       - name: Send Email

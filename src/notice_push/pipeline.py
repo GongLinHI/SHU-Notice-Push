@@ -8,19 +8,22 @@ from typing import Callable, Iterable, Optional
 
 from src.notice_push.config import AppConfig
 from src.notice_push.http import HttpClient
-from src.notice_push.models import FailedNotice, NoticeDetail, NoticeListItem, NoticeSource, PipelineResult, SourceError
+from src.notice_push.models import (
+    FailedNotice,
+    NoticeDetail,
+    NoticeListItem,
+    NoticeSource,
+    PipelineResult,
+    PipelineRunOptions,
+    ReportStats,
+    SourceError,
+)
 from src.notice_push.report import ReportEntry, render_report, write_report
 from src.notice_push.storage import NoticeStorage
 
 
 AdapterFactory = Callable[[NoticeSource], object]
-LEGACY_ADAPTER_ALIASES = {
-    "shu_official": "src.notice_push.sources.shu_official.ShuOfficialAdapter",
-    "management_school": "src.notice_push.sources.management_school.ManagementSchoolAdapter",
-    "graduate_school": "src.notice_push.sources.graduate_school.GraduateSchoolAdapter",
-}
 UNBOUNDED_PAGE_SCAN = float("inf")
-UNSET = object()
 SUPPORTED_ASSET_KINDS = {"pdf", "image"}
 SUPPORTED_ASSET_ROLES = {"primary", "attachment"}
 
@@ -30,6 +33,12 @@ class PreparedNotice:
     source: NoticeSource
     notice_id: int
     detail: NoticeDetail
+
+
+@dataclass(frozen=True)
+class DetailFetchResult:
+    prepared: Optional[PreparedNotice] = None
+    failure: Optional[FailedNotice] = None
 
 
 @dataclass(frozen=True)
@@ -59,59 +68,23 @@ class NoticePipeline:
 
     def run(
         self,
-        source_ids: Optional[Iterable[str]] = None,
-        dry_run: bool = False,
-        limit: Optional[int] = None,
-        report_date: Optional[date] = None,
-        max_pages_per_source: Optional[int] | object = UNSET,
-        stop_after_seen_pages: Optional[int] | object = UNSET,
-        detail_max_workers: Optional[int] | object = UNSET,
-        summary_max_workers: Optional[int] | object = UNSET,
-        lookback_days: Optional[int] | object = UNSET,
-        retry_failed: bool | object = UNSET,
-        failed_retry_limit: int | object = UNSET,
-        failed_retry_after_hours: int | object = UNSET,
-        refresh_seen_details: bool | object = UNSET,
-        refresh_seen_max_workers: Optional[int] | object = UNSET,
-        refresh_seen_limit: int | object = UNSET,
-        bootstrap_seen: bool = False,
+        options: PipelineRunOptions,
     ) -> PipelineResult:
-        selected_sources = self._select_sources(source_ids)
-        default_profile = self.config.runtime_profile("daily")
-        max_pages = default_profile.max_pages_per_source if max_pages_per_source is UNSET else max_pages_per_source
-        stop_after_seen = (
-            default_profile.stop_after_seen_pages if stop_after_seen_pages is UNSET else stop_after_seen_pages
-        )
-        detail_worker_count = (
-            default_profile.detail_max_workers if detail_max_workers is UNSET else detail_max_workers
-        )
-        summary_worker_count = (
-            default_profile.summary_max_workers if summary_max_workers is UNSET else summary_max_workers
-        )
-        active_lookback_days = default_profile.lookback_days if lookback_days is UNSET else lookback_days
-        active_retry_failed = default_profile.retry_failed if retry_failed is UNSET else retry_failed
-        active_failed_retry_limit = (
-            default_profile.failed_retry_limit if failed_retry_limit is UNSET else failed_retry_limit
-        )
-        active_failed_retry_after_hours = (
-            default_profile.failed_retry_after_hours
-            if failed_retry_after_hours is UNSET
-            else failed_retry_after_hours
-        )
-        active_refresh_seen_details = (
-            default_profile.refresh_seen_details if refresh_seen_details is UNSET else refresh_seen_details
-        )
-        active_refresh_seen_workers = (
-            default_profile.refresh_seen_max_workers
-            if refresh_seen_max_workers is UNSET
-            else refresh_seen_max_workers
-        )
-        active_refresh_seen_limit = (
-            default_profile.refresh_seen_limit if refresh_seen_limit is UNSET else refresh_seen_limit
-        )
+        selected_sources = self._select_sources(options.source_ids or None)
+        max_pages = options.max_pages_per_source
+        stop_after_seen = options.stop_after_seen_pages
+        detail_worker_count = options.detail_max_workers
+        summary_worker_count = options.summary_max_workers
+        active_lookback_days = options.lookback_days
+        active_retry_failed = options.retry_failed
+        active_failed_retry_limit = options.failed_retry_limit
+        active_failed_retry_after_hours = options.failed_retry_after_hours
+        active_refresh_seen_details = options.refresh_seen_details
+        active_refresh_seen_workers = options.refresh_seen_max_workers
+        active_refresh_seen_limit = options.refresh_seen_limit
         if max_pages is None:
             max_pages = UNBOUNDED_PAGE_SCAN
-        report_day = report_date or date.today()
+        report_day = options.report_date or date.today()
         cutoff = _cutoff_datetime(report_day, active_lookback_days)
         failure_retry_policy = FailureRetryPolicy(
             limit=active_failed_retry_limit,
@@ -122,10 +95,10 @@ class NoticePipeline:
         failures: list[FailedNotice] = []
         source_errors: list[SourceError] = []
         new_count = 0
+        retried_count = 0
 
-        if not dry_run:
+        if not options.dry_run:
             self.storage.initialize()
-            self.storage.migrate_legacy_csv(self.config.repo_root / "resources" / "notice_records.csv")
 
         for source in selected_sources:
             adapter = self.adapter_factory(source)
@@ -156,8 +129,8 @@ class NoticePipeline:
                 processable_list_items = _items_within_lookback(list_items, cutoff)
                 page_is_before_cutoff = _page_is_before_cutoff(list_items, cutoff)
 
-                if bootstrap_seen:
-                    if not dry_run:
+                if options.bootstrap_seen:
+                    if not options.dry_run:
                         self.storage.mark_seen_baseline(processable_list_items)
                     if page_is_before_cutoff:
                         break
@@ -165,34 +138,39 @@ class NoticePipeline:
                     pages_scanned += 1
                     continue
 
-                seen_rows = {} if dry_run else self.storage.find_seen_items(processable_list_items)
-                candidate_items = (
-                    processable_list_items
-                    if dry_run
-                    else self.storage.filter_processable_items(
+                seen_rows = {} if options.dry_run else self.storage.find_seen_items(processable_list_items)
+                if options.dry_run:
+                    new_items = processable_list_items
+                    retry_items: list[NoticeListItem] = []
+                else:
+                    new_items, retry_items = self.storage.split_processable_items(
                         processable_list_items,
                         retry_failed=active_retry_failed,
                         failed_retry_limit=active_failed_retry_limit,
                     )
-                )
+                new_keys = {_item_key(item) for item in new_items}
+                retry_keys = {_item_key(item) for item in retry_items}
+                processable_keys = new_keys | retry_keys
+                candidate_items = [item for item in processable_list_items if _item_key(item) in processable_keys]
                 if candidate_items:
                     seen_only_pages = 0
                 else:
                     seen_only_pages += 1
 
-                remaining_capacity = None if limit is None else max(0, limit - processed_for_source)
+                remaining_capacity = None if options.limit is None else max(0, options.limit - processed_for_source)
                 if remaining_capacity == 0:
                     break
 
                 selected_items = candidate_items if remaining_capacity is None else candidate_items[:remaining_capacity]
                 processed_for_source += len(selected_items)
-                new_count += len(selected_items)
+                new_count += sum(1 for item in selected_items if _item_key(item) in new_keys)
+                retried_count += sum(1 for item in selected_items if _item_key(item) in retry_keys)
 
                 prepared_notices = self._fetch_details_for_items(
                     source=source,
                     adapter=adapter,
                     items=selected_items,
-                    dry_run=dry_run,
+                    dry_run=options.dry_run,
                     failures=failures,
                     max_workers=detail_worker_count,
                     retry_policy=failure_retry_policy,
@@ -207,7 +185,7 @@ class NoticePipeline:
                         retry_policy=failure_retry_policy,
                     )
 
-                if not dry_run and seen_rows:
+                if not options.dry_run and seen_rows:
                     selected_urls = {item.canonical_url for item in selected_items}
                     seen_items = [
                         item
@@ -224,7 +202,7 @@ class NoticePipeline:
                             max_workers=active_refresh_seen_workers,
                         )
 
-                if not dry_run and limit is not None and processed_for_source >= limit:
+                if not options.dry_run and options.limit is not None and processed_for_source >= options.limit:
                     break
                 if stop_after_seen is not None and seen_only_pages >= stop_after_seen:
                     break
@@ -235,14 +213,22 @@ class NoticePipeline:
                 pages_scanned += 1
 
         report_path = None
-        if not dry_run and (entries or failures):
-            markdown = render_report(report_day, entries, failures)
+        if not options.dry_run and (entries or failures):
+            stats = ReportStats(
+                new_count=new_count,
+                retried_count=retried_count,
+                summarized_count=len(entries),
+                manual_review_count=len(failures),
+            )
+            markdown = render_report(report_day, entries, failures, stats)
             report_path = write_report(self.config.output_dir, report_day, markdown)
 
         return PipelineResult(
             report_path=report_path,
             new_count=new_count,
             summarized_count=len(entries),
+            retried_count=retried_count,
+            manual_review_count=len(failures),
             failed=tuple(failures),
             source_errors=tuple(source_errors),
         )
@@ -253,9 +239,8 @@ class NoticePipeline:
         adapter,
         item: NoticeListItem,
         dry_run: bool,
-        failures: list[FailedNotice],
         retry_policy: FailureRetryPolicy,
-    ) -> Optional[PreparedNotice]:
+    ) -> DetailFetchResult:
         notice_id = None
         if not dry_run:
             notice_id = self.storage.upsert_seen_item(item)
@@ -269,11 +254,11 @@ class NoticePipeline:
                 raise ValueError("detail content is empty or too short")
 
             if dry_run:
-                return None
+                return DetailFetchResult()
 
             assert notice_id is not None
             self.storage.save_detail(notice_id, detail)
-            return PreparedNotice(source=source, notice_id=notice_id, detail=detail)
+            return DetailFetchResult(prepared=PreparedNotice(source=source, notice_id=notice_id, detail=detail))
         except Exception as exc:
             failure = FailedNotice(
                 source_id=source.id,
@@ -283,7 +268,6 @@ class NoticePipeline:
                 reason=str(exc),
                 published_at=item.published_at,
             )
-            failures.append(failure)
             if not dry_run and notice_id is not None:
                 self.storage.mark_failed(
                     notice_id,
@@ -292,7 +276,7 @@ class NoticePipeline:
                     retry_after_hours=retry_policy.after_hours,
                     retry_limit=retry_policy.limit,
                 )
-            return None
+            return DetailFetchResult(failure=failure)
 
     def _fetch_details_for_items(
         self,
@@ -308,7 +292,7 @@ class NoticePipeline:
             return []
 
         worker_count = min(max(1, max_workers or 1), len(items))
-        outcomes: dict[int, Optional[PreparedNotice]] = {}
+        outcomes: dict[int, DetailFetchResult] = {}
 
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
             future_to_index = {
@@ -318,7 +302,6 @@ class NoticePipeline:
                     adapter,
                     item,
                     dry_run,
-                    failures,
                     retry_policy,
                 ): index
                 for index, item in enumerate(items)
@@ -327,7 +310,14 @@ class NoticePipeline:
                 index = future_to_index[future]
                 outcomes[index] = future.result()
 
-        return [outcomes[index] for index in range(len(items)) if outcomes[index] is not None]
+        prepared_notices: list[PreparedNotice] = []
+        for index in range(len(items)):
+            outcome = outcomes[index]
+            if outcome.failure is not None:
+                failures.append(outcome.failure)
+            if outcome.prepared is not None:
+                prepared_notices.append(outcome.prepared)
+        return prepared_notices
 
     def _update_seen_details_if_changed(
         self,
@@ -428,8 +418,8 @@ class NoticePipeline:
         return [source for source in self.config.sources if source.enabled]
 
 
-def create_adapter(source: NoticeSource):
-    adapter_path = LEGACY_ADAPTER_ALIASES.get(source.adapter, source.adapter)
+def create_adapter(source: NoticeSource, detail_parser=None):
+    adapter_path = source.adapter
     module_name, _, class_name = adapter_path.rpartition(".")
     if not module_name or not class_name:
         raise ValueError(
@@ -438,7 +428,7 @@ def create_adapter(source: NoticeSource):
         )
     module = import_module(module_name)
     adapter_class = getattr(module, class_name)
-    return adapter_class(source)
+    return adapter_class(source, detail_parser=detail_parser)
 
 
 def _cutoff_datetime(report_day: date, lookback_days: Optional[int]) -> Optional[datetime]:
@@ -451,6 +441,10 @@ def _items_within_lookback(items: list[NoticeListItem], cutoff: Optional[datetim
     if cutoff is None:
         return items
     return [item for item in items if item.published_at is None or item.published_at >= cutoff]
+
+
+def _item_key(item: NoticeListItem) -> tuple[str, str]:
+    return item.source_id, item.canonical_url
 
 
 def _page_is_before_cutoff(items: list[NoticeListItem], cutoff: Optional[datetime]) -> bool:

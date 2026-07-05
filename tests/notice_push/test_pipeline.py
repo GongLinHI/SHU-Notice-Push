@@ -1,8 +1,9 @@
 from datetime import date, datetime
 import threading
+import time
 
 from src.notice_push.config import load_config
-from src.notice_push.models import NoticeAsset, NoticeDetail, NoticeListItem, NoticeSummary
+from src.notice_push.models import NoticeAsset, NoticeDetail, NoticeListItem, NoticeSummary, PipelineRunOptions
 from src.notice_push.pipeline import NoticePipeline, create_adapter, is_summarizable_detail
 from src.notice_push.storage import NoticeStorage
 
@@ -63,6 +64,31 @@ class FakeSummarizer:
             prompt_version="notice_summary_v1",
             generated_at=datetime(2026, 6, 30, 8, 0),
         )
+
+
+def run_pipeline(pipeline, **overrides):
+    profile = pipeline.config.runtime_profile("daily")
+    values = {
+        "source_ids": (),
+        "dry_run": False,
+        "limit": None,
+        "report_date": None,
+        "max_pages_per_source": profile.max_pages_per_source,
+        "stop_after_seen_pages": profile.stop_after_seen_pages,
+        "detail_max_workers": profile.detail_max_workers,
+        "summary_max_workers": profile.summary_max_workers,
+        "lookback_days": profile.lookback_days,
+        "retry_failed": profile.retry_failed,
+        "failed_retry_limit": profile.failed_retry_limit,
+        "failed_retry_after_hours": profile.failed_retry_after_hours,
+        "refresh_seen_details": profile.refresh_seen_details,
+        "refresh_seen_max_workers": profile.refresh_seen_max_workers,
+        "refresh_seen_limit": profile.refresh_seen_limit,
+        "bootstrap_seen": False,
+    }
+    values.update(overrides)
+    values["source_ids"] = tuple(values["source_ids"] or ())
+    return pipeline.run(PipelineRunOptions(**values))
 
 
 class FailingSummarizer:
@@ -207,6 +233,19 @@ class RecordingHttp:
         return "detail"
 
 
+class DelayedHttp(FakeHttp):
+    def get_text(self, url):
+        if "detail-" in url:
+            index = int(url.rsplit("-", 1)[1].removesuffix(".htm"))
+            time.sleep((5 - index) * 0.01)
+        return super().get_text(url)
+
+
+class FailingDetailAdapter(MultiItemAdapter):
+    def parse_detail(self, html, item):
+        raise RuntimeError(f"detail failed for {item.title}")
+
+
 def test_pdf_detail_is_summarizable_even_when_text_is_short():
     detail = NoticeDetail(
         source_id="management_school",
@@ -288,7 +327,7 @@ def test_pipeline_dry_run_fetches_list_and_detail_without_mutating_state(tmp_pat
         adapter_factory=lambda selected_source: FakeAdapter(selected_source),
     )
 
-    result = pipeline.run(
+    result = run_pipeline(pipeline,
         source_ids=["shu_official"],
         dry_run=True,
         limit=1,
@@ -323,7 +362,7 @@ def test_pipeline_run_persists_summary_and_writes_report(tmp_path):
         adapter_factory=lambda selected_source: FakeAdapter(selected_source),
     )
 
-    result = pipeline.run(
+    result = run_pipeline(pipeline,
         source_ids=["shu_official"],
         dry_run=False,
         limit=1,
@@ -356,7 +395,7 @@ def test_pipeline_accepts_pdf_asset_detail_without_text_body(tmp_path):
         adapter_factory=lambda selected_source: PdfOnlyAdapter(selected_source),
     )
 
-    result = pipeline.run(
+    result = run_pipeline(pipeline,
         source_ids=["shu_official"],
         dry_run=False,
         limit=1,
@@ -388,7 +427,7 @@ def test_pipeline_marks_video_asset_detail_as_unsupported(tmp_path):
         adapter_factory=lambda selected_source: UnsupportedVideoAdapter(selected_source),
     )
 
-    result = pipeline.run(
+    result = run_pipeline(pipeline,
         source_ids=["shu_official"],
         dry_run=False,
         limit=1,
@@ -435,7 +474,7 @@ def test_pipeline_retries_failed_notices_when_retry_policy_allows(tmp_path):
         adapter_factory=lambda selected_source: FakeAdapter(selected_source),
     )
 
-    result = pipeline.run(
+    result = run_pipeline(pipeline,
         source_ids=["shu_official"],
         dry_run=False,
         limit=1,
@@ -445,7 +484,8 @@ def test_pipeline_retries_failed_notices_when_retry_policy_allows(tmp_path):
         failed_retry_limit=3,
     )
 
-    assert result.new_count == 1
+    assert result.new_count == 0
+    assert result.retried_count == 1
     assert result.summarized_count == 1
     assert storage.find_by_source_url("shu_official", item.canonical_url)["status"] == "summarized"
 
@@ -468,7 +508,7 @@ def test_pipeline_preserves_failure_count_across_summary_retries(tmp_path):
     )
 
     for _ in range(2):
-        pipeline.run(
+        run_pipeline(pipeline,
             source_ids=["shu_official"],
             dry_run=False,
             limit=1,
@@ -514,7 +554,7 @@ def test_pipeline_defaults_to_daily_retry_failed_when_not_explicit(tmp_path):
         adapter_factory=lambda selected_source: FakeAdapter(selected_source),
     )
 
-    result = pipeline.run(
+    result = run_pipeline(pipeline,
         source_ids=["shu_official"],
         dry_run=False,
         limit=1,
@@ -522,7 +562,8 @@ def test_pipeline_defaults_to_daily_retry_failed_when_not_explicit(tmp_path):
         report_date=date(2026, 6, 30),
     )
 
-    assert result.new_count == 1
+    assert result.new_count == 0
+    assert result.retried_count == 1
     assert storage.find_by_source_url("shu_official", item.canonical_url)["status"] == "summarized"
 
 
@@ -544,7 +585,7 @@ def test_pipeline_continues_when_one_source_directory_page_fails(tmp_path):
         adapter_factory=lambda selected_source: FakeAdapter(selected_source),
     )
 
-    result = pipeline.run(
+    result = run_pipeline(pipeline,
         source_ids=["shu_official", "management_school"],
         dry_run=False,
         limit=1,
@@ -580,7 +621,7 @@ def test_pipeline_records_source_directory_failure_without_creating_report(tmp_p
         adapter_factory=lambda selected_source: FakeAdapter(selected_source),
     )
 
-    result = pipeline.run(
+    result = run_pipeline(pipeline,
         source_ids=["shu_official"],
         dry_run=False,
         limit=1,
@@ -593,6 +634,36 @@ def test_pipeline_records_source_directory_failure_without_creating_report(tmp_p
     assert len(result.source_errors) == 1
     assert result.source_errors[0].source_id == source.id
     assert result.report_path is None
+
+
+def test_pipeline_does_not_read_legacy_notice_records_csv(tmp_path):
+    resources_dir = tmp_path / "resources"
+    resources_dir.mkdir()
+    (resources_dir / "notice_records.csv").write_bytes(b"\xff")
+    config = load_config(
+        env={},
+        repo_root=tmp_path,
+        state_path=tmp_path / "state.sqlite3",
+        output_dir=tmp_path / "results",
+    )
+    source = config.source_by_id("shu_official")
+    pipeline = NoticePipeline(
+        config=config,
+        storage=NoticeStorage(config.state_path, config.sources),
+        http_client=FakeHttp({source.list_url: "list-1", "https://example.com/detail-1.htm": "detail"}),
+        summarizer=FakeSummarizer(),
+        adapter_factory=lambda selected_source: FakeAdapter(selected_source),
+    )
+
+    result = run_pipeline(pipeline,
+        source_ids=["shu_official"],
+        dry_run=False,
+        limit=1,
+        max_pages_per_source=1,
+        report_date=date(2026, 7, 5),
+    )
+
+    assert result.new_count == 1
 
 
 def test_pipeline_allows_unbounded_page_scan_when_profile_requests_backfill(tmp_path):
@@ -619,7 +690,7 @@ def test_pipeline_allows_unbounded_page_scan_when_profile_requests_backfill(tmp_
         adapter_factory=lambda selected_source: FakeAdapter(selected_source),
     )
 
-    pipeline.run(
+    run_pipeline(pipeline,
         source_ids=["shu_official"],
         dry_run=False,
         limit=None,
@@ -661,7 +732,7 @@ def test_pipeline_defaults_to_daily_profile_when_runtime_limits_are_not_explicit
         adapter_factory=lambda selected_source: FivePageAdapter(selected_source),
     )
 
-    result = pipeline.run(
+    result = run_pipeline(pipeline,
         source_ids=["shu_official"],
         dry_run=False,
         stop_after_seen_pages=None,
@@ -702,7 +773,7 @@ def test_pipeline_stops_backfill_after_notices_older_than_window(tmp_path):
         adapter_factory=lambda selected_source: DatedPagingAdapter(selected_source),
     )
 
-    result = pipeline.run(
+    result = run_pipeline(pipeline,
         source_ids=["shu_official"],
         dry_run=False,
         max_pages_per_source=None,
@@ -738,7 +809,7 @@ def test_pipeline_defaults_to_daily_lookback_when_not_explicit(tmp_path):
         adapter_factory=lambda selected_source: DatedPagingAdapter(selected_source),
     )
 
-    result = pipeline.run(
+    result = run_pipeline(pipeline,
         source_ids=["shu_official"],
         dry_run=False,
         report_date=date(2026, 7, 1),
@@ -765,7 +836,7 @@ def test_pipeline_stops_when_next_page_repeats_current_url(tmp_path):
         adapter_factory=lambda selected_source: LoopingAdapter(selected_source),
     )
 
-    pipeline.run(
+    run_pipeline(pipeline,
         source_ids=["shu_official"],
         dry_run=False,
         max_pages_per_source=None,
@@ -794,7 +865,7 @@ def test_pipeline_fetches_detail_pages_with_small_thread_pool(tmp_path):
         adapter_factory=lambda selected_source: MultiItemAdapter(selected_source),
     )
 
-    result = pipeline.run(
+    result = run_pipeline(pipeline,
         source_ids=["shu_official"],
         dry_run=False,
         limit=None,
@@ -812,6 +883,48 @@ def test_pipeline_fetches_detail_pages_with_small_thread_pool(tmp_path):
     assert result.summarized_count == 4
     assert len(detail_starts) == 4
     assert len(detail_ends) == 4
+
+
+def test_pipeline_keeps_detail_failures_in_list_order_with_concurrent_workers(tmp_path):
+    config = load_config(
+        env={},
+        repo_root=tmp_path,
+        state_path=tmp_path / "state.sqlite3",
+        output_dir=tmp_path / "results",
+    )
+    source = config.source_by_id("shu_official")
+    http = DelayedHttp(
+        {
+            source.list_url: "list-1",
+            "https://example.com/detail-1.htm": "detail",
+            "https://example.com/detail-2.htm": "detail",
+            "https://example.com/detail-3.htm": "detail",
+            "https://example.com/detail-4.htm": "detail",
+        }
+    )
+    pipeline = NoticePipeline(
+        config=config,
+        storage=NoticeStorage(config.state_path, config.sources),
+        http_client=http,
+        summarizer=FakeSummarizer(),
+        adapter_factory=lambda selected_source: FailingDetailAdapter(selected_source),
+    )
+
+    result = run_pipeline(
+        pipeline,
+        source_ids=["shu_official"],
+        dry_run=False,
+        max_pages_per_source=1,
+        detail_max_workers=4,
+        report_date=date(2026, 7, 5),
+    )
+
+    assert [failure.title for failure in result.failed] == [
+        "测试通知 1",
+        "测试通知 2",
+        "测试通知 3",
+        "测试通知 4",
+    ]
 
 
 def test_pipeline_updates_seen_notice_detail_hash_without_resummarizing(tmp_path):
@@ -869,7 +982,7 @@ def test_pipeline_updates_seen_notice_detail_hash_without_resummarizing(tmp_path
         adapter_factory=lambda selected_source: ChangedDetailAdapter(selected_source),
     )
 
-    result = pipeline.run(
+    result = run_pipeline(pipeline,
         source_ids=["shu_official"],
         dry_run=False,
         limit=1,
@@ -927,7 +1040,7 @@ def test_pipeline_skips_seen_detail_refresh_when_disabled(tmp_path):
         adapter_factory=lambda selected_source: FakeAdapter(selected_source),
     )
 
-    pipeline.run(
+    run_pipeline(pipeline,
         source_ids=["shu_official"],
         dry_run=False,
         max_pages_per_source=1,
@@ -958,3 +1071,4 @@ def test_create_adapter_loads_adapter_from_import_path(tmp_path):
     adapter = create_adapter(import_path_source)
 
     assert isinstance(adapter, ShuOfficialAdapter)
+

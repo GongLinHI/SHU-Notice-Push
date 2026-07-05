@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from bs4 import BeautifulSoup
 
-from src.notice_push.html_utils import clean_text, extract_detail_assets, extract_text_blocks, infer_content_kind, is_external_video_page, parse_date, promote_primary_assets, select_main_content
+from src.notice_push.html_utils import clean_text, is_external_video_page, parse_date
 from src.notice_push.models import Attachment, NoticeDetail, NoticeListItem
 from src.notice_push.sources.base import NoticeSourceAdapter
 
@@ -33,16 +33,14 @@ class GraduateSchoolAdapter(NoticeSourceAdapter):
 
     def parse_detail(self, html: str, item: NoticeListItem) -> NoticeDetail:
         soup = BeautifulSoup(html, "html.parser")
-        content_node = select_main_content(soup, ["#vsb_content .v_news_content", ".v_news_content"])
         body_text = clean_text(soup.get_text(" ", strip=True))
-        assets = extract_detail_assets(content_node, soup, item.url)
-        content = extract_text_blocks(content_node) if content_node else ""
-        content_kind = infer_content_kind(content, assets)
-        if is_external_video_page(item.url):
-            content_kind = "video"
-            assets = ()
-        assets = promote_primary_assets(content_kind, assets)
-        attachments = self._attachments_from_assets(assets)
+        body = self.detail_parser.parse_body(
+            soup,
+            item.url,
+            ["#vsb_content .v_news_content", ".v_news_content"],
+            forced_content_kind="video" if is_external_video_page(item.url, rules=self.detail_parser.rules) else None,
+        )
+        attachments = self._attachments_from_assets(body.assets)
         return NoticeDetail(
             source_id=item.source_id,
             url=item.url,
@@ -50,10 +48,10 @@ class GraduateSchoolAdapter(NoticeSourceAdapter):
             title=item.title,
             published_at=parse_date(body_text) or item.published_at,
             list_excerpt=item.list_excerpt,
-            content=content,
+            content=body.content,
             attachments=attachments,
-            assets=assets,
-            content_kind=content_kind,
+            assets=body.assets,
+            content_kind=body.content_kind,
         )
 
     def _attachments_from_assets(self, assets) -> tuple[Attachment, ...]:

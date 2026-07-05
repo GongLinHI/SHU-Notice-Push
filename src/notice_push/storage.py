@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import csv
 import hashlib
+import json
 import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, Optional
@@ -14,10 +15,12 @@ class NoticeStorage:
     def __init__(self, db_path: Path, sources: Iterable[NoticeSource]):
         self.db_path = Path(db_path)
         self.sources = tuple(sources)
+        self._write_lock = threading.RLock()
 
     def initialize(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as conn:
+        with self._write_lock, self._connect() as conn:
+            conn.execute("pragma journal_mode = wal")
             conn.executescript(
                 """
                 create table if not exists sources (
@@ -39,6 +42,9 @@ class NoticeStorage:
                     title text not null,
                     list_excerpt text not null default '',
                     content text not null default '',
+                    content_kind text not null default 'text',
+                    assets_json text not null default '[]',
+                    attachments_json text not null default '[]',
                     published_at text,
                     first_seen_at text not null,
                     last_seen_at text not null,
@@ -99,9 +105,24 @@ class NoticeStorage:
         retry_failed: bool = False,
         failed_retry_limit: int = 0,
     ) -> list[NoticeListItem]:
+        new_items, retry_items = self.split_processable_items(
+            items,
+            retry_failed=retry_failed,
+            failed_retry_limit=failed_retry_limit,
+        )
+        return new_items + retry_items
+
+    def split_processable_items(
+        self,
+        items: Iterable[NoticeListItem],
+        *,
+        retry_failed: bool = False,
+        failed_retry_limit: int = 0,
+    ) -> tuple[list[NoticeListItem], list[NoticeListItem]]:
         new_items: list[NoticeListItem] = []
+        retry_items: list[NoticeListItem] = []
         now = _now()
-        with self._connect() as conn:
+        with self._write_lock, self._connect() as conn:
             for item in items:
                 row = conn.execute(
                     """
@@ -134,8 +155,8 @@ class NoticeStorage:
                         ),
                     )
                     if retry_failed and _row_retryable(row, failed_retry_limit, now):
-                        new_items.append(item)
-        return new_items
+                        retry_items.append(item)
+        return new_items, retry_items
 
     def find_seen_items(self, items: Iterable[NoticeListItem]) -> dict[str, sqlite3.Row]:
         rows: dict[str, sqlite3.Row] = {}
@@ -151,7 +172,7 @@ class NoticeStorage:
 
     def upsert_seen_item(self, item: NoticeListItem, status: str = "seen") -> int:
         now = _now()
-        with self._connect() as conn:
+        with self._write_lock, self._connect() as conn:
             conn.execute(
                 """
                 insert into notices(source_id, url, canonical_url, title, list_excerpt, published_at,
@@ -184,8 +205,10 @@ class NoticeStorage:
             )
 
     def save_detail(self, notice_id: int, detail: NoticeDetail) -> None:
-        content_hash = hashlib.sha256(detail.content.encode("utf-8")).hexdigest()
-        with self._connect() as conn:
+        assets_json = _assets_json(detail)
+        attachments_json = _attachments_json(detail)
+        content_hash = _content_hash(detail)
+        with self._write_lock, self._connect() as conn:
             conn.execute(
                 """
                 update notices set
@@ -193,6 +216,9 @@ class NoticeStorage:
                     content = ?,
                     published_at = coalesce(?, published_at),
                     list_excerpt = ?,
+                    content_kind = ?,
+                    assets_json = ?,
+                    attachments_json = ?,
                     content_hash = ?,
                     detail_fetched_at = ?,
                     status = case
@@ -226,6 +252,9 @@ class NoticeStorage:
                     detail.content,
                     _dt(detail.published_at),
                     detail.list_excerpt,
+                    detail.content_kind or "text",
+                    assets_json,
+                    attachments_json,
                     content_hash,
                     _now(),
                     notice_id,
@@ -233,8 +262,10 @@ class NoticeStorage:
             )
 
     def update_seen_detail_if_changed(self, notice_id: int, detail: NoticeDetail) -> bool:
-        content_hash = hashlib.sha256(detail.content.encode("utf-8")).hexdigest()
-        with self._connect() as conn:
+        assets_json = _assets_json(detail)
+        attachments_json = _attachments_json(detail)
+        content_hash = _content_hash(detail)
+        with self._write_lock, self._connect() as conn:
             row = conn.execute("select content_hash from notices where id = ?", (notice_id,)).fetchone()
             if row is None:
                 raise KeyError(notice_id)
@@ -247,6 +278,9 @@ class NoticeStorage:
                     content = ?,
                     published_at = coalesce(?, published_at),
                     list_excerpt = ?,
+                    content_kind = ?,
+                    assets_json = ?,
+                    attachments_json = ?,
                     content_hash = ?,
                     detail_fetched_at = ?,
                     status = 'updated_seen',
@@ -266,6 +300,9 @@ class NoticeStorage:
                     detail.content,
                     _dt(detail.published_at),
                     detail.list_excerpt,
+                    detail.content_kind or "text",
+                    assets_json,
+                    attachments_json,
                     content_hash,
                     _now(),
                     notice_id,
@@ -274,7 +311,7 @@ class NoticeStorage:
         return True
 
     def save_summary(self, notice_id: int, summary: NoticeSummary) -> None:
-        with self._connect() as conn:
+        with self._write_lock, self._connect() as conn:
             conn.execute(
                 """
                 update notices set
@@ -314,7 +351,7 @@ class NoticeStorage:
             if retry_after_hours >= 0
             else None
         )
-        with self._connect() as conn:
+        with self._write_lock, self._connect() as conn:
             conn.execute(
                 """
                 update notices set
@@ -334,7 +371,7 @@ class NoticeStorage:
 
     def mark_seen_baseline(self, items: Iterable[NoticeListItem]) -> int:
         count = 0
-        with self._connect() as conn:
+        with self._write_lock, self._connect() as conn:
             for item in items:
                 now = _now()
                 cursor = conn.execute(
@@ -356,27 +393,6 @@ class NoticeStorage:
                 )
                 count += cursor.rowcount
         return count
-
-    def migrate_legacy_csv(self, csv_path: Path) -> int:
-        if not Path(csv_path).exists():
-            return 0
-
-        migrated = 0
-        with Path(csv_path).open("r", encoding="utf-8", newline="") as file, self._connect() as conn:
-            for row in csv.reader(file):
-                if len(row) < 2 or not row[0] or not row[1]:
-                    continue
-                now = _now()
-                cursor = conn.execute(
-                    """
-                    insert or ignore into notices(source_id, url, canonical_url, title, content_hash,
-                                                  first_seen_at, last_seen_at, status)
-                    values ('shu_official', ?, ?, '', ?, ?, ?, 'seen_legacy')
-                    """,
-                    (row[0], row[0], row[1], now, now),
-                )
-                migrated += cursor.rowcount
-        return migrated
 
     def get_notice(self, notice_id: int) -> sqlite3.Row:
         with self._connect() as conn:
@@ -402,11 +418,15 @@ class NoticeStorage:
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
+        conn.execute("pragma busy_timeout = 30000")
         return conn
 
     def _ensure_notice_columns(self, conn: sqlite3.Connection) -> None:
         existing = {row["name"] for row in conn.execute("pragma table_info(notices)").fetchall()}
         columns = {
+            "content_kind": "text not null default 'text'",
+            "assets_json": "text not null default '[]'",
+            "attachments_json": "text not null default '[]'",
             "failure_type": "text not null default ''",
             "failure_count": "integer not null default 0",
             "last_failed_at": "text",
@@ -423,6 +443,40 @@ def _now() -> str:
 
 def _dt(value: Optional[datetime]) -> Optional[str]:
     return value.replace(microsecond=0).isoformat() if value else None
+
+
+def _attachments_json(detail: NoticeDetail) -> str:
+    return json.dumps(
+        [{"name": item.name, "url": item.url} for item in detail.attachments],
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _assets_json(detail: NoticeDetail) -> str:
+    return json.dumps(
+        [
+            {
+                "kind": item.kind,
+                "role": item.role,
+                "name": item.name,
+                "url": item.url,
+                "mime_type": item.mime_type,
+            }
+            for item in detail.assets
+        ],
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _content_hash(detail: NoticeDetail) -> str:
+    digest = hashlib.sha256()
+    digest.update((detail.content or "").encode("utf-8"))
+    digest.update((detail.content_kind or "text").encode("utf-8"))
+    digest.update(_assets_json(detail).encode("utf-8"))
+    digest.update(_attachments_json(detail).encode("utf-8"))
+    return digest.hexdigest()
 
 
 def _row_retryable(row: sqlite3.Row, retry_limit: int, now: str) -> bool:

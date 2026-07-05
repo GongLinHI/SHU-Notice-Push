@@ -3,7 +3,13 @@ from datetime import datetime
 import pytest
 
 from src.notice_push.models import Attachment, NoticeAsset, NoticeDetail
-from src.notice_push.summarizer import KimiMultimodalSummarizer, NoticeSummarizer, SummarizerRouter, load_prompt
+from src.notice_push.summarizer import (
+    KimiMultimodalSummarizer,
+    NoticeSummarizer,
+    SummarizerRouter,
+    load_prompt,
+    render_notice_user_prompt,
+)
 
 
 class _FakeMessage:
@@ -152,6 +158,30 @@ def make_image_detail() -> NoticeDetail:
     )
 
 
+def test_render_notice_user_prompt_includes_assets_when_attachments_are_empty():
+    detail = NoticeDetail(
+        source_id="management_school",
+        url="https://ms.shu.edu.cn/info/1245/91745.htm",
+        canonical_url="https://ms.shu.edu.cn/info/1245/91745.htm",
+        title="巡察公告",
+        content="",
+        assets=(
+            NoticeAsset(
+                kind="pdf",
+                role="primary",
+                name="巡察公告.pdf",
+                url="https://ms.shu.edu.cn/__local/inspection.pdf",
+                mime_type="application/pdf",
+            ),
+        ),
+        content_kind="pdf",
+    )
+
+    prompt = render_notice_user_prompt(detail, source_name="上海大学管理学院")
+
+    assert "- 巡察公告.pdf: https://ms.shu.edu.cn/__local/inspection.pdf" in prompt
+
+
 def test_load_prompt_reads_named_prompt(tmp_path):
     prompt_dir = tmp_path / "prompts"
     prompt_dir.mkdir()
@@ -216,7 +246,7 @@ def test_summarizer_retries_with_exponential_backoff_and_timeout(tmp_path, monke
     fake_client = _FakeClient()
     fake_client.chat.completions = _FlakyCompletions()
     sleep_calls = []
-    monkeypatch.setattr("src.notice_push.summarizer.time.sleep", sleep_calls.append)
+    monkeypatch.setattr("src.notice_push.llm_chat.time.sleep", sleep_calls.append)
     summarizer = NoticeSummarizer(
         prompt_dir=prompt_dir,
         prompt_name="notice_summary_v1",

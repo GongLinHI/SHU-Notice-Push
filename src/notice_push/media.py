@@ -12,10 +12,13 @@ from src.notice_push.models import NoticeAsset
 
 def download_asset_to_temp(http_client: HttpClient, asset: NoticeAsset) -> Path:
     suffix = _suffix_for_asset(asset)
+    content = http_client.get_bytes(asset.url)
     handle = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
     path = Path(handle.name)
-    handle.close()
-    path.write_bytes(http_client.get_bytes(asset.url))
+    try:
+        handle.write(content)
+    finally:
+        handle.close()
     return path
 
 

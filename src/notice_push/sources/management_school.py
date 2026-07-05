@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from bs4 import BeautifulSoup
 
-from src.notice_push.html_utils import clean_text, extract_detail_assets, extract_text_blocks, infer_content_kind, parse_date, promote_primary_assets, select_main_content
+from src.notice_push.html_utils import clean_text, parse_date
 from src.notice_push.models import NoticeDetail, NoticeListItem
 from src.notice_push.sources.base import NoticeSourceAdapter
 
@@ -39,12 +39,8 @@ class ManagementSchoolAdapter(NoticeSourceAdapter):
     def parse_detail(self, html: str, item: NoticeListItem) -> NoticeDetail:
         soup = BeautifulSoup(html, "html.parser")
         title_node = soup.select_one("#HRCMS_ctr13929_CalendarDetail_lblTitle")
-        content_node = select_main_content(soup, [".v_news_content"])
         body_text = clean_text(soup.get_text(" ", strip=True))
-        assets = extract_detail_assets(content_node, soup, item.url)
-        content = extract_text_blocks(content_node) if content_node else ""
-        content_kind = infer_content_kind(content, assets)
-        assets = promote_primary_assets(content_kind, assets)
+        body = self.detail_parser.parse_body(soup, item.url, [".v_news_content"])
         return NoticeDetail(
             source_id=item.source_id,
             url=item.url,
@@ -52,7 +48,7 @@ class ManagementSchoolAdapter(NoticeSourceAdapter):
             title=clean_text(title_node.get_text(" ", strip=True)) if title_node else item.title,
             published_at=parse_date(body_text) or item.published_at,
             list_excerpt=item.list_excerpt,
-            content=content,
-            assets=assets,
-            content_kind=content_kind,
+            content=body.content,
+            assets=body.assets,
+            content_kind=body.content_kind,
         )

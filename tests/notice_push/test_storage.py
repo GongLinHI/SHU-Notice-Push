@@ -1,9 +1,8 @@
-import csv
 import sqlite3
 from datetime import datetime
 
 from src.notice_push.config import load_config
-from src.notice_push.models import NoticeDetail, NoticeListItem, NoticeSummary
+from src.notice_push.models import Attachment, NoticeAsset, NoticeDetail, NoticeListItem, NoticeSummary
 from src.notice_push.storage import NoticeStorage
 
 
@@ -109,6 +108,25 @@ def test_storage_returns_retryable_failed_items_until_retry_limit(tmp_path):
     storage.mark_failed(notice_id, "temporary empty detail again", failure_type="detail_empty", retry_after_hours=0, retry_limit=2)
 
     assert storage.filter_processable_items([item], retry_failed=True, failed_retry_limit=2) == []
+
+
+def test_storage_splits_first_seen_and_retryable_failed_items(tmp_path):
+    config = load_config(env={}, repo_root=tmp_path)
+    storage = NoticeStorage(tmp_path / "state.sqlite3", config.sources)
+    storage.initialize()
+    retry_item = make_item("shu_official", "https://example.com/retry.htm")
+    new_item = make_item("shu_official", "https://example.com/new.htm")
+    notice_id = storage.upsert_seen_item(retry_item)
+    storage.mark_failed(notice_id, "temporary empty detail", failure_type="detail_empty", retry_after_hours=0, retry_limit=3)
+
+    new_items, retry_items = storage.split_processable_items(
+        [retry_item, new_item],
+        retry_failed=True,
+        failed_retry_limit=3,
+    )
+
+    assert new_items == [new_item]
+    assert retry_items == [retry_item]
 
 
 def test_storage_updates_changed_seen_detail_without_resending(tmp_path):
@@ -251,22 +269,10 @@ def test_storage_save_detail_clears_generic_detail_failure_state(tmp_path):
     assert row["next_retry_at"] is None
 
 
-def test_storage_migrates_legacy_csv_and_bootstrap_baseline(tmp_path):
+def test_storage_marks_bootstrap_baseline(tmp_path):
     config = load_config(env={}, repo_root=tmp_path)
-    csv_path = tmp_path / "notice_records.csv"
-    with csv_path.open("w", encoding="utf-8", newline="") as file:
-        writer = csv.writer(file)
-        writer.writerow(["https://www.shu.edu.cn/info/1051/old.htm", "abc123"])
-
     storage = NoticeStorage(tmp_path / "state.sqlite3", config.sources)
     storage.initialize()
-    migrated = storage.migrate_legacy_csv(csv_path)
-
-    legacy = storage.find_by_source_url("shu_official", "https://www.shu.edu.cn/info/1051/old.htm")
-    assert migrated == 1
-    assert legacy["status"] == "seen_legacy"
-    assert legacy["content_hash"] == "abc123"
-
     baseline_item = make_item("graduate_school", "https://gs.shu.edu.cn/info/1026/baseline.htm")
     storage.mark_seen_baseline([baseline_item])
 
@@ -283,6 +289,130 @@ def test_storage_uses_temporary_database_only(tmp_path):
     assert db_path.exists()
     with sqlite3.connect(db_path) as conn:
         assert conn.execute("select count(*) from sources").fetchone()[0] == 3
+
+
+def test_storage_initializes_media_metadata_columns(tmp_path):
+    config = load_config(env={}, repo_root=tmp_path)
+    db_path = tmp_path / "state.sqlite3"
+    storage = NoticeStorage(db_path, config.sources)
+
+    storage.initialize()
+
+    with sqlite3.connect(db_path) as conn:
+        columns = {row[1] for row in conn.execute("pragma table_info(notices)").fetchall()}
+
+    assert {"content_kind", "assets_json", "attachments_json"} <= columns
+
+
+def test_storage_configures_sqlite_for_concurrent_writes(tmp_path):
+    config = load_config(env={}, repo_root=tmp_path)
+    db_path = tmp_path / "state.sqlite3"
+    storage = NoticeStorage(db_path, config.sources)
+
+    storage.initialize()
+
+    with storage._connect() as conn:
+        assert conn.execute("pragma busy_timeout").fetchone()[0] == 30000
+        assert conn.execute("pragma journal_mode").fetchone()[0].lower() == "wal"
+
+    assert storage._write_lock.acquire(blocking=False)
+    storage._write_lock.release()
+
+
+def test_storage_saves_media_metadata_for_detail(tmp_path):
+    config = load_config(env={}, repo_root=tmp_path)
+    storage = NoticeStorage(tmp_path / "state.sqlite3", config.sources)
+    storage.initialize()
+    item = NoticeListItem(
+        source_id="management_school",
+        url="https://ms.shu.edu.cn/info/1245/91745.htm",
+        canonical_url="https://ms.shu.edu.cn/info/1245/91745.htm",
+        title="巡察公告",
+    )
+    notice_id = storage.upsert_seen_item(item)
+
+    storage.save_detail(
+        notice_id,
+        NoticeDetail(
+            source_id=item.source_id,
+            url=item.url,
+            canonical_url=item.canonical_url,
+            title=item.title,
+            content="",
+            attachments=(Attachment(name="巡察公告.pdf", url="https://ms.shu.edu.cn/__local/inspection.pdf"),),
+            assets=(
+                NoticeAsset(
+                    kind="pdf",
+                    role="primary",
+                    name="巡察公告.pdf",
+                    url="https://ms.shu.edu.cn/__local/inspection.pdf",
+                    mime_type="application/pdf",
+                ),
+            ),
+            content_kind="pdf",
+        ),
+    )
+
+    row = storage.get_notice(notice_id)
+
+    assert row["content_kind"] == "pdf"
+    assert '"kind": "pdf"' in row["assets_json"]
+    assert '"巡察公告.pdf"' in row["attachments_json"]
+
+
+def test_storage_content_hash_changes_when_asset_url_changes_even_with_empty_content(tmp_path):
+    config = load_config(env={}, repo_root=tmp_path)
+    storage = NoticeStorage(tmp_path / "state.sqlite3", config.sources)
+    storage.initialize()
+    item = NoticeListItem(
+        source_id="management_school",
+        url="https://ms.shu.edu.cn/info/1245/91745.htm",
+        canonical_url="https://ms.shu.edu.cn/info/1245/91745.htm",
+        title="巡察公告",
+    )
+    notice_id = storage.upsert_seen_item(item)
+
+    first_detail = NoticeDetail(
+        source_id=item.source_id,
+        url=item.url,
+        canonical_url=item.canonical_url,
+        title=item.title,
+        content="",
+        assets=(
+            NoticeAsset(
+                "pdf",
+                "primary",
+                "巡察公告.pdf",
+                "https://ms.shu.edu.cn/__local/inspection-v1.pdf",
+                "application/pdf",
+            ),
+        ),
+        content_kind="pdf",
+    )
+    second_detail = NoticeDetail(
+        source_id=item.source_id,
+        url=item.url,
+        canonical_url=item.canonical_url,
+        title=item.title,
+        content="",
+        assets=(
+            NoticeAsset(
+                "pdf",
+                "primary",
+                "巡察公告.pdf",
+                "https://ms.shu.edu.cn/__local/inspection-v2.pdf",
+                "application/pdf",
+            ),
+        ),
+        content_kind="pdf",
+    )
+
+    storage.save_detail(notice_id, first_detail)
+    first_hash = storage.get_notice(notice_id)["content_hash"]
+    storage.save_detail(notice_id, second_detail)
+    second_hash = storage.get_notice(notice_id)["content_hash"]
+
+    assert first_hash != second_hash
 
 
 def test_storage_migrates_existing_database_with_retry_columns(tmp_path):

@@ -6,10 +6,12 @@ from pathlib import Path
 from typing import Optional
 
 from src.notice_push.config import load_config
+from src.notice_push.detail_parser import DetailParser
+from src.notice_push.html_utils import ParsingRules
 from src.notice_push.http import HttpClient
-from src.notice_push.llm import resolve_optional_provider, resolve_provider
-from src.notice_push.models import NoticeRuntimeProfile
-from src.notice_push.pipeline import NoticePipeline
+from src.notice_push.llm import resolve_optional_provider
+from src.notice_push.models import NoticeRuntimeProfile, PipelineRunOptions
+from src.notice_push.pipeline import NoticePipeline, create_adapter
 from src.notice_push.storage import NoticeStorage
 from src.notice_push.summarizer import KimiMultimodalSummarizer, NoticeSummarizer, SummarizerRouter
 
@@ -39,13 +41,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def build_pipeline(config, profile: NoticeRuntimeProfile) -> NoticePipeline:
+    parsing_rules = ParsingRules(
+        external_video_domains=config.parsing.external_video_domains,
+        noise_image_markers=config.parsing.noise_image_markers,
+    )
+    detail_parser = DetailParser(parsing_rules)
     storage = NoticeStorage(config.state_path, config.sources)
     http_client = HttpClient(
         timeout=profile.http_timeout,
         max_retries=profile.http_max_retries,
         initial_retry_delay=profile.http_initial_retry_delay,
     )
-    deepseek_provider = resolve_provider("deepseek", config.llm_providers["deepseek"])
+    deepseek_provider = resolve_optional_provider("deepseek", config.llm_providers["deepseek"])
     kimi_provider = resolve_optional_provider("kimi", config.llm_providers["kimi"])
     text_summarizer = NoticeSummarizer(
         prompt_dir=config.repo_root / "resources" / "prompts",
@@ -80,6 +87,32 @@ def build_pipeline(config, profile: NoticeRuntimeProfile) -> NoticePipeline:
         storage=storage,
         http_client=http_client,
         summarizer=summarizer,
+        adapter_factory=lambda source: create_adapter(source, detail_parser=detail_parser),
+    )
+
+
+def run_options_from_args(args, profile: NoticeRuntimeProfile) -> PipelineRunOptions:
+    return PipelineRunOptions(
+        source_ids=tuple(args.sources or ()),
+        dry_run=args.dry_run,
+        limit=args.limit,
+        report_date=date.fromisoformat(args.report_date) if args.report_date else None,
+        max_pages_per_source=(
+            args.max_pages_per_source if args.max_pages_per_source is not None else profile.max_pages_per_source
+        ),
+        stop_after_seen_pages=(
+            args.stop_after_seen_pages if args.stop_after_seen_pages is not None else profile.stop_after_seen_pages
+        ),
+        detail_max_workers=args.detail_max_workers if args.detail_max_workers is not None else profile.detail_max_workers,
+        summary_max_workers=args.summary_max_workers if args.summary_max_workers is not None else profile.summary_max_workers,
+        lookback_days=args.lookback_days if args.lookback_days is not None else profile.lookback_days,
+        retry_failed=profile.retry_failed,
+        failed_retry_limit=profile.failed_retry_limit,
+        failed_retry_after_hours=profile.failed_retry_after_hours,
+        refresh_seen_details=profile.refresh_seen_details,
+        refresh_seen_max_workers=profile.refresh_seen_max_workers,
+        refresh_seen_limit=profile.refresh_seen_limit,
+        bootstrap_seen=args.bootstrap_seen,
     )
 
 
@@ -99,46 +132,13 @@ def main(argv: Optional[list[str]] = None) -> int:
                 + ", ".join(sorted(available_sources))
             )
     pipeline = build_pipeline(config, profile)
-    report_date = date.fromisoformat(args.report_date) if args.report_date else None
-    max_pages_per_source = args.max_pages_per_source
-    stop_after_seen_pages = args.stop_after_seen_pages
-    detail_max_workers = args.detail_max_workers
-    summary_max_workers = args.summary_max_workers
-    lookback_days = args.lookback_days
-
-    if max_pages_per_source is None:
-        max_pages_per_source = profile.max_pages_per_source
-    if stop_after_seen_pages is None:
-        stop_after_seen_pages = profile.stop_after_seen_pages
-    if detail_max_workers is None:
-        detail_max_workers = profile.detail_max_workers
-    if summary_max_workers is None:
-        summary_max_workers = profile.summary_max_workers
-    if lookback_days is None:
-        lookback_days = profile.lookback_days
-
-    result = pipeline.run(
-        source_ids=args.sources,
-        dry_run=args.dry_run,
-        limit=args.limit,
-        report_date=report_date,
-        max_pages_per_source=max_pages_per_source,
-        stop_after_seen_pages=stop_after_seen_pages,
-        detail_max_workers=detail_max_workers,
-        summary_max_workers=summary_max_workers,
-        lookback_days=lookback_days,
-        retry_failed=profile.retry_failed,
-        failed_retry_limit=profile.failed_retry_limit,
-        failed_retry_after_hours=profile.failed_retry_after_hours,
-        refresh_seen_details=profile.refresh_seen_details,
-        refresh_seen_max_workers=profile.refresh_seen_max_workers,
-        refresh_seen_limit=profile.refresh_seen_limit,
-        bootstrap_seen=args.bootstrap_seen,
-    )
+    result = pipeline.run(run_options_from_args(args, profile))
 
     print(f"new_count={result.new_count}")
+    print(f"retried_count={result.retried_count}")
     print(f"summarized_count={result.summarized_count}")
     print(f"failed_count={len(result.failed)}")
+    print(f"manual_review_count={result.manual_review_count}")
     print(f"source_error_count={len(result.source_errors)}")
     if result.report_path:
         print(f"report_path={result.report_path}")

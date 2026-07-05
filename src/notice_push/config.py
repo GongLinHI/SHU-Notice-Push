@@ -7,7 +7,7 @@ from typing import Any, Mapping, Optional
 from dotenv import load_dotenv
 import yaml
 
-from src.notice_push.models import AppConfig, LLMProviderConfig, NoticeRuntimeProfile, NoticeSource
+from src.notice_push.models import AppConfig, LLMProviderConfig, NoticeRuntimeProfile, NoticeSource, ParsingConfig
 
 
 PROFILE_DEFAULTS: dict[str, dict[str, Any]] = {
@@ -83,6 +83,7 @@ DEFAULT_LLM_PROVIDERS: dict[str, dict[str, str]] = {
     },
 }
 DEFAULT_LLM_ROUTING = {"text": "deepseek", "pdf": "kimi", "image": "kimi"}
+DEFAULT_PARSING = ParsingConfig()
 
 
 def _repo_root() -> Path:
@@ -251,8 +252,6 @@ def _llm_providers(yaml_config: Mapping[str, Any], env: Mapping[str, str]) -> di
         defaults = DEFAULT_LLM_PROVIDERS.get(provider_id, {})
         model_env = str(provider_config.get("model_env", defaults.get("model_env", f"{provider_id.upper()}_MODEL")))
         default_model = str(provider_config.get("default_model", defaults.get("default_model", "")))
-        if provider_id == "deepseek" and "deepseek_model" in yaml_config and "default_model" not in provider_config:
-            default_model = str(yaml_config["deepseek_model"])
         providers[provider_id] = LLMProviderConfig(
             name=provider_id,
             base_url=str(provider_config.get("base_url", defaults.get("base_url", ""))),
@@ -270,6 +269,32 @@ def _llm_routing(yaml_config: Mapping[str, Any]) -> dict[str, str]:
         raise ValueError("Runtime config 'llm.routing' must be a mapping")
     routing.update({str(key): str(value) for key, value in yaml_routing.items()})
     return routing
+
+
+def _parsing_config(yaml_config: Mapping[str, Any]) -> ParsingConfig:
+    yaml_parsing = _yaml_value(yaml_config, "parsing", default={}) or {}
+    if not isinstance(yaml_parsing, Mapping):
+        raise ValueError("Runtime config 'parsing' must be a mapping")
+    return ParsingConfig(
+        external_video_domains=_string_tuple(
+            yaml_parsing.get("external_video_domains"),
+            DEFAULT_PARSING.external_video_domains,
+            "parsing.external_video_domains",
+        ),
+        noise_image_markers=_string_tuple(
+            yaml_parsing.get("noise_image_markers"),
+            DEFAULT_PARSING.noise_image_markers,
+            "parsing.noise_image_markers",
+        ),
+    )
+
+
+def _string_tuple(raw, default: tuple[str, ...], key: str) -> tuple[str, ...]:
+    if raw is None:
+        return default
+    if not isinstance(raw, list | tuple):
+        raise ValueError(f"Runtime config '{key}' must be a list")
+    return tuple(str(value).strip().lower() for value in raw if str(value).strip())
 
 
 def load_config(
@@ -294,9 +319,9 @@ def load_config(
         state_path=Path(resolved_state_path),
         output_dir=Path(resolved_output_dir),
         prompt_name=str(_yaml_value(yaml_config, "prompt_name", default="notice_summary_v1")),
-        deepseek_model=llm_providers["deepseek"].default_model,
         llm_providers=llm_providers,
         llm_routing=_llm_routing(yaml_config),
+        parsing=_parsing_config(yaml_config),
         detail_min_chars=int(_yaml_value(yaml_config, "detail_min_chars", default=30)),
         runtime_profiles=_runtime_profiles(yaml_config),
         sources=_default_sources(yaml_config),

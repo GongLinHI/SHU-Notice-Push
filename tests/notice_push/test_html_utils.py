@@ -3,12 +3,17 @@ from datetime import datetime
 from bs4 import BeautifulSoup
 
 from src.notice_push.html_utils import (
+    ParsingRules,
     absolute_url,
     clean_text,
+    extract_image_assets,
     extract_text_blocks,
+    infer_content_kind,
+    is_external_video_page,
     parse_date,
     remove_noise_nodes,
 )
+from src.notice_push.models import NoticeAsset
 
 
 def test_absolute_url_resolves_relative_paths():
@@ -60,3 +65,55 @@ def test_remove_noise_nodes_and_extract_text_blocks():
 
     assert "alert" not in content.get_text()
     assert extract_text_blocks(content) == "广大师生：\n请注意停电安排。\n停电时间 2026年6月16日"
+
+
+def test_infer_content_kind_prefers_substantive_text_over_external_video_asset():
+    assets = (
+        NoticeAsset(
+            kind="external_video",
+            role="primary",
+            name="看看新闻视频页",
+            url="https://www.kankanews.com/detail/dZ2e81vaawR",
+            mime_type="text/html",
+        ),
+    )
+
+    assert infer_content_kind("这是通知正文，已经足够说明事项安排。", assets) == "text"
+
+
+def test_infer_content_kind_keeps_empty_external_video_page_as_video():
+    assets = (
+        NoticeAsset(
+            kind="external_video",
+            role="primary",
+            name="看看新闻视频页",
+            url="https://www.kankanews.com/detail/dZ2e81vaawR",
+            mime_type="text/html",
+        ),
+    )
+
+    assert infer_content_kind("", assets) == "video"
+
+
+def test_explicit_parsing_rules_affect_video_domains_and_noise_images():
+    rules = ParsingRules(
+        external_video_domains=("video.example.edu",),
+        noise_image_markers=("tracking",),
+    )
+
+    assert is_external_video_page("https://media.video.example.edu/watch/123", rules=rules)
+    assert not is_external_video_page("https://www.kankanews.com/detail/dZ2e81vaawR", rules=rules)
+
+    soup = BeautifulSoup(
+        """
+        <div>
+          <img src="/images/notice.png" alt="通知主体">
+          <img src="/images/tracking-pixel.png" alt="统计图">
+        </div>
+        """,
+        "html.parser",
+    )
+
+    assets = extract_image_assets(soup, "https://example.edu/info/1.htm", rules=rules)
+
+    assert [asset.url for asset in assets] == ["https://example.edu/images/notice.png"]

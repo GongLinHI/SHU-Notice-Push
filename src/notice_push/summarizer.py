@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
@@ -9,8 +8,10 @@ from typing import Callable, Optional
 from openai import OpenAI
 
 from src.notice_push.http import HttpClient
+from src.notice_push.llm_chat import create_chat_completion_with_retry
 from src.notice_push.media import download_asset_to_temp, image_path_to_data_url
 from src.notice_push.models import NoticeAsset, NoticeDetail, NoticeSummary
+from src.notice_push.resources import visible_notice_resources
 
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
@@ -30,7 +31,8 @@ def render_notice_user_prompt(
     source_name: Optional[str] = None,
     content: Optional[str] = None,
 ) -> str:
-    attachments = "\n".join(f"- {item.name}: {item.url}" for item in detail.attachments) or "未提及"
+    resources = visible_notice_resources(detail)
+    attachments = "\n".join(f"- {name}: {url}" for name, url in resources) or "未提及"
     published_at = detail.published_at.isoformat(sep=" ") if detail.published_at else "未提及"
     body = detail.content if content is None else content
     return (
@@ -90,30 +92,18 @@ class NoticeSummarizer:
         return render_notice_user_prompt(detail, source_name=source_name)
 
     def _chat(self, system_prompt: str, user_prompt: str) -> str:
-        last_error: Optional[Exception] = None
-        for attempt in range(self.max_retries):
-            try:
-                response = self._get_client().chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    stream=False,
-                    timeout=self.timeout,
-                )
-                content = response.choices[0].message.content
-                if not content or not content.strip():
-                    raise ValueError("empty summary response from model")
-                return content
-            except Exception as exc:
-                last_error = exc
-                if attempt + 1 >= self.max_retries:
-                    break
-                retry_delay = self.initial_retry_delay * (self.retry_backoff**attempt)
-                if retry_delay:
-                    time.sleep(retry_delay)
-        raise last_error  # type: ignore[misc]
+        return create_chat_completion_with_retry(
+            self._get_client(),
+            model=self.model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            timeout=self.timeout,
+            max_retries=self.max_retries,
+            initial_retry_delay=self.initial_retry_delay,
+            retry_backoff=self.retry_backoff,
+        )
 
     def _get_system_prompt(self) -> str:
         if self._system_prompt is None:
@@ -245,27 +235,15 @@ class KimiMultimodalSummarizer:
             self._cleanup_download(path)
 
     def _chat(self, messages: list[dict]) -> str:
-        last_error: Optional[Exception] = None
-        for attempt in range(self.max_retries):
-            try:
-                response = self._get_client().chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    stream=False,
-                    timeout=self.timeout,
-                )
-                content = response.choices[0].message.content
-                if not content or not content.strip():
-                    raise ValueError("empty summary response from model")
-                return content
-            except Exception as exc:
-                last_error = exc
-                if attempt + 1 >= self.max_retries:
-                    break
-                retry_delay = self.initial_retry_delay * (self.retry_backoff**attempt)
-                if retry_delay:
-                    time.sleep(retry_delay)
-        raise last_error  # type: ignore[misc]
+        return create_chat_completion_with_retry(
+            self._get_client(),
+            model=self.model,
+            messages=messages,
+            timeout=self.timeout,
+            max_retries=self.max_retries,
+            initial_retry_delay=self.initial_retry_delay,
+            retry_backoff=self.retry_backoff,
+        )
 
     def _select_asset(self, detail: NoticeDetail, kind: str) -> NoticeAsset:
         for asset in detail.assets:

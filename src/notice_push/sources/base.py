@@ -4,13 +4,15 @@ from abc import ABC, abstractmethod
 
 from bs4 import BeautifulSoup
 
+from src.notice_push.detail_parser import DetailParser
 from src.notice_push.html_utils import absolute_url, clean_text
 from src.notice_push.models import NoticeDetail, NoticeListItem, NoticeSource
 
 
 class NoticeSourceAdapter(ABC):
-    def __init__(self, source: NoticeSource):
+    def __init__(self, source: NoticeSource, detail_parser: DetailParser | None = None):
         self.source = source
+        self.detail_parser = detail_parser or DetailParser()
 
     @abstractmethod
     def parse_list_page(self, html: str, page_url: str) -> list[NoticeListItem]:

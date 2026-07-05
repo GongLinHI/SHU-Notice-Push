@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from src.notice_push.detail_parser import ParsedDetailBody
 from src.notice_push.models import NoticeListItem
 from src.notice_push.config import load_config
 from src.notice_push.sources.graduate_school import GraduateSchoolAdapter
@@ -28,6 +29,30 @@ def test_shu_official_adapter_parses_list_next_page_and_detail(tmp_path):
     assert adapter.find_next_page_url(read_fixture("shu_official_list.html"), source.list_url) == "https://www.shu.edu.cn/tzgg/123.htm"
     assert detail.content == "广大师生：\n因电力检修，将会对宝山校区部分楼宇的用电产生影响。\n联系人：徐老师、王老师"
     assert detail.list_excerpt == "目录页摘要不应作为正文。"
+
+
+def test_source_adapter_uses_injected_detail_parser(tmp_path):
+    class FakeDetailParser:
+        def parse_body(self, soup, page_url, selectors, forced_content_kind=None):
+            return ParsedDetailBody(
+                content="由注入解析器产生的正文",
+                assets=(),
+                content_kind="text",
+                content_node=None,
+            )
+
+    source = load_config(env={}, repo_root=tmp_path).source_by_id("shu_official")
+    adapter = ShuOfficialAdapter(source, detail_parser=FakeDetailParser())
+    item = NoticeListItem(
+        source_id=source.id,
+        url="https://www.shu.edu.cn/info/1051/397035.htm",
+        canonical_url="https://www.shu.edu.cn/info/1051/397035.htm",
+        title="注入解析器测试",
+    )
+
+    detail = adapter.parse_detail("<html><body><h1>注入解析器测试</h1></body></html>", item)
+
+    assert detail.content == "由注入解析器产生的正文"
 
 
 def test_management_school_adapter_parses_table_list_next_page_and_detail(tmp_path):

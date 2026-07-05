@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
@@ -87,8 +87,38 @@ class PipelineResult:
     report_path: Optional[Path]
     new_count: int
     summarized_count: int
+    retried_count: int = 0
+    manual_review_count: int = 0
     failed: tuple[FailedNotice, ...] = field(default_factory=tuple)
     source_errors: tuple[SourceError, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class ReportStats:
+    new_count: int
+    retried_count: int
+    summarized_count: int
+    manual_review_count: int
+
+
+@dataclass(frozen=True)
+class PipelineRunOptions:
+    source_ids: tuple[str, ...] = ()
+    dry_run: bool = False
+    limit: Optional[int] = None
+    report_date: Optional[date] = None
+    max_pages_per_source: Optional[int] = None
+    stop_after_seen_pages: Optional[int] = None
+    detail_max_workers: int = 1
+    summary_max_workers: int = 1
+    lookback_days: Optional[int] = None
+    retry_failed: bool = False
+    failed_retry_limit: int = 0
+    failed_retry_after_hours: int = 0
+    refresh_seen_details: bool = False
+    refresh_seen_max_workers: int = 1
+    refresh_seen_limit: int = 0
+    bootstrap_seen: bool = False
 
 
 @dataclass(frozen=True)
@@ -124,14 +154,20 @@ class LLMProviderConfig:
 
 
 @dataclass(frozen=True)
+class ParsingConfig:
+    external_video_domains: tuple[str, ...] = ("kankanews.com",)
+    noise_image_markers: tuple[str, ...] = ("logo", "icon", "wx", "weixin", "qr", "blank", "spacer")
+
+
+@dataclass(frozen=True)
 class AppConfig:
     repo_root: Path
     state_path: Path
     output_dir: Path
     prompt_name: str
-    deepseek_model: str
     llm_providers: dict[str, LLMProviderConfig]
     llm_routing: dict[str, str]
+    parsing: ParsingConfig
     detail_min_chars: int
     runtime_profiles: dict[str, NoticeRuntimeProfile]
     sources: tuple[NoticeSource, ...]

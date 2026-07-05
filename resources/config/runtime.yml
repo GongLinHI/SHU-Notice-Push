@@ -18,6 +18,18 @@ llm:
     pdf: kimi
     image: kimi
 
+parsing:
+  external_video_domains:
+    - kankanews.com
+  noise_image_markers:
+    - logo
+    - icon
+    - wx
+    - weixin
+    - qr
+    - blank
+    - spacer
+
 sources:
   shu_official:
     name: 上海大学官网
