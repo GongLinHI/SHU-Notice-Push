@@ -57,6 +57,7 @@ class LLMProviderConfig:
     api_key_env: str
     model_env: str
     default_model: str
+    kind: str
 
 
 @dataclass(frozen=True)

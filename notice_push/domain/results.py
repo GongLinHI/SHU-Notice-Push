@@ -42,6 +42,7 @@ class PipelineResult:
     report_path: Optional[Path]
     new_count: int
     summarized_count: int
+    updated_count: int = 0
     retried_count: int = 0
     manual_review_count: int = 0
     failed: tuple[FailedNotice, ...] = field(default_factory=tuple)
@@ -61,6 +62,7 @@ class PipelineResult:
 @dataclass(frozen=True)
 class PipelineCounters:
     new_count: int
+    updated_count: int
     retried_count: int
     summarized_count: int
     failed_count: int
@@ -77,3 +79,4 @@ class ReportStats:
     retried_count: int
     summarized_count: int
     manual_review_count: int
+    updated_count: int = 0

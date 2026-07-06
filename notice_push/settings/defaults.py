@@ -27,7 +27,7 @@ PROFILE_DEFAULTS: dict[str, dict[str, Any]] = {
         "llm_retry_backoff": 2.0,
     },
     "backfill": {
-        "max_pages_per_source": None,
+        "max_pages_per_source": 80,
         "stop_after_seen_pages": None,
         "detail_max_workers": 4,
         "summary_max_workers": 3,
@@ -70,12 +70,14 @@ DEFAULT_LLM_PROVIDERS: dict[str, dict[str, str]] = {
         "api_key_env": "DEEPSEEK_API_KEY",
         "model_env": "DEEPSEEK_MODEL",
         "default_model": "deepseek-v4-flash",
+        "kind": "openai_text",
     },
     "kimi": {
         "base_url": "https://api.moonshot.cn/v1",
         "api_key_env": "KIMI_API_KEY",
         "model_env": "KIMI_MODEL",
         "default_model": "kimi-k2.7-code",
+        "kind": "kimi_multimodal",
     },
 }
 

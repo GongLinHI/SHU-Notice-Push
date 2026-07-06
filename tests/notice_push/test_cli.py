@@ -141,7 +141,7 @@ def test_cli_applies_backfill_profile_defaults(monkeypatch):
     exit_code = main(["--dry-run", "--profile", "backfill"])
 
     assert exit_code == 0
-    assert fake_pipeline.last_options.max_pages_per_source is None
+    assert fake_pipeline.last_options.max_pages_per_source == 80
     assert fake_pipeline.last_options.stop_after_seen_pages is None
     assert fake_pipeline.last_options.detail_max_workers == 4
     assert fake_pipeline.last_options.summary_max_workers == 3
@@ -241,6 +241,7 @@ def test_cli_prints_source_error_count_for_no_report(monkeypatch, tmp_path, caps
             return PipelineResult(
                 report_path=None,
                 new_count=0,
+                updated_count=2,
                 summarized_count=0,
                 source_errors=(
                     SourceError(
@@ -257,6 +258,7 @@ def test_cli_prints_source_error_count_for_no_report(monkeypatch, tmp_path, caps
     assert main(["--state-path", str(tmp_path / "state.sqlite3"), "--output-dir", str(tmp_path)]) == 1
     output = capsys.readouterr().out
     assert "new_count=0" in output
+    assert "updated_count=2" in output
     assert "summarized_count=0" in output
     assert "failed_count=0" in output
     assert "source_error_count=1" in output

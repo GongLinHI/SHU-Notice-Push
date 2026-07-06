@@ -129,6 +129,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     counters = pipeline_counters(result)
 
     print(f"new_count={counters.new_count}")
+    print(f"updated_count={counters.updated_count}")
     print(f"retried_count={counters.retried_count}")
     print(f"summarized_count={counters.summarized_count}")
     print(f"failed_count={counters.failed_count}")

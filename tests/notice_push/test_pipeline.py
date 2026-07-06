@@ -590,6 +590,20 @@ def test_pipeline_marks_video_asset_detail_as_unsupported(tmp_path):
     assert row["status"] == "failed"
     assert row["failure_type"] == "unsupported_video_content"
 
+    second_result = run_pipeline(
+        pipeline,
+        source_ids=["shu_official"],
+        dry_run=False,
+        limit=1,
+        max_pages_per_source=1,
+        report_date=date(2026, 6, 30),
+        retry_failed=True,
+        failed_retry_limit=3,
+    )
+    row_after_retry_window = storage.find_by_source_url("shu_official", "https://example.com/detail-1.htm")
+    assert second_result.retried_count == 0
+    assert row_after_retry_window["failure_count"] == 1
+
 
 def test_pipeline_retries_failed_notices_when_retry_policy_allows(tmp_path):
     config = load_config(
@@ -1075,7 +1089,7 @@ def test_pipeline_keeps_detail_failures_in_list_order_with_concurrent_workers(tm
     ]
 
 
-def test_pipeline_updates_seen_notice_detail_hash_without_resummarizing(tmp_path):
+def test_pipeline_updates_seen_notice_detail_hash_and_resummarizes(tmp_path):
     config = load_config(
         env={},
         repo_root=tmp_path,
@@ -1142,10 +1156,87 @@ def test_pipeline_updates_seen_notice_detail_hash_without_resummarizing(tmp_path
 
     row = storage.find_by_source_url("shu_official", item.canonical_url)
     assert result.new_count == 0
-    assert result.report_path is None
-    assert summarizer.details == []
-    assert row["status"] == "updated_seen"
+    assert result.updated_count == 1
+    assert result.summarized_count == 1
+    assert result.report_path == tmp_path / "results" / "2026-06-30.md"
+    assert [detail.content for detail in summarizer.details] == [
+        "这是一段足够长的新详情页正文，用于更新已见通知的 content_hash。"
+    ]
+    assert row["status"] == "summarized"
     assert "新详情页正文" in row["content"]
+
+
+def test_pipeline_resummarizes_leftover_updated_seen_notice_on_next_run(tmp_path):
+    config = load_config(
+        env={},
+        repo_root=tmp_path,
+        state_path=tmp_path / "state.sqlite3",
+        output_dir=tmp_path / "results",
+    )
+    source = config.source_by_id("shu_official")
+    storage = NoticeStorage(config.state_path, config.sources)
+    storage.initialize()
+    item = NoticeListItem(
+        source_id=source.id,
+        url="https://example.com/detail-1.htm",
+        canonical_url="https://example.com/detail-1.htm",
+        title="测试通知 1",
+        published_at=datetime(2026, 6, 16),
+        list_excerpt="列表摘要",
+    )
+    notice_id = storage.upsert_seen_item(item)
+    storage.save_detail(
+        notice_id,
+        NoticeDetail(
+            source_id=item.source_id,
+            url=item.url,
+            canonical_url=item.canonical_url,
+            title=item.title,
+            content="这是一段旧详情页正文，用于建立初始 content_hash。",
+            published_at=item.published_at,
+            list_excerpt=item.list_excerpt,
+        ),
+    )
+    storage.update_seen_detail_if_changed(
+        notice_id,
+        NoticeDetail(
+            source_id=item.source_id,
+            url=item.url,
+            canonical_url=item.canonical_url,
+            title=item.title,
+            content="这是一段足够长的新详情页正文，需要在下次运行时重新摘要。",
+            published_at=item.published_at,
+            list_excerpt=item.list_excerpt,
+        ),
+    )
+
+    summarizer = FakeSummarizer()
+    pipeline = NoticePipeline(
+        config=config,
+        storage=storage,
+        http_client=FakeHttp({source.list_url: "list-1", "https://example.com/detail-1.htm": "detail"}),
+        summarizer=summarizer,
+        adapter_factory=lambda selected_source: FakeAdapter(selected_source),
+    )
+
+    result = run_pipeline(
+        pipeline,
+        source_ids=["shu_official"],
+        dry_run=False,
+        limit=1,
+        max_pages_per_source=1,
+        refresh_seen_details=False,
+        report_date=date(2026, 7, 6),
+    )
+
+    row = storage.find_by_source_url("shu_official", item.canonical_url)
+    assert result.new_count == 0
+    assert result.updated_count == 1
+    assert result.summarized_count == 1
+    assert [detail.content for detail in summarizer.details] == [
+        "这是一段足够长的新详情页正文，需要在下次运行时重新摘要。"
+    ]
+    assert row["status"] == "summarized"
 
 
 def test_pipeline_reports_refresh_seen_detail_errors(tmp_path):

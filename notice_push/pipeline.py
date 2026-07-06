@@ -9,7 +9,7 @@ from typing import Callable, Iterable, Optional
 
 from notice_push.domain.config import AppConfig
 from notice_push.crawler.detail_fetcher import PreparedNotice, fetch_details_for_items, is_summarizable_detail
-from notice_push.crawler.failures import FailureRetryPolicy, classify_failure
+from notice_push.crawler.failures import FailureRetryPolicy, classify_failure, retry_limit_for_failure
 from notice_push.crawler.list_scanner import (
     UNBOUNDED_PAGE_SCAN,
     cutoff_datetime,
@@ -88,6 +88,7 @@ class NoticePipeline:
         audit_results = ()
         new_count = 0
         retried_count = 0
+        updated_count = 0
 
         if options.audit_sources:
             audit_results = SourceAuditor(
@@ -143,15 +144,17 @@ class NoticePipeline:
                 if options.dry_run:
                     new_items = processable_list_items
                     retry_items: list[NoticeListItem] = []
+                    updated_items: list[NoticeListItem] = []
                 else:
-                    new_items, retry_items = self.storage.split_processable_items(
+                    new_items, retry_items, updated_items = self.storage.split_pipeline_items(
                         processable_list_items,
                         retry_failed=active_retry_failed,
                         failed_retry_limit=active_failed_retry_limit,
                     )
                 new_keys = {item_key(item) for item in new_items}
                 retry_keys = {item_key(item) for item in retry_items}
-                processable_keys = new_keys | retry_keys
+                updated_keys = {item_key(item) for item in updated_items}
+                processable_keys = new_keys | retry_keys | updated_keys
                 candidate_items = [item for item in processable_list_items if item_key(item) in processable_keys]
                 if candidate_items:
                     seen_only_pages = 0
@@ -166,11 +169,22 @@ class NoticePipeline:
                 processed_for_source += len(selected_items)
                 new_count += sum(1 for item in selected_items if item_key(item) in new_keys)
                 retried_count += sum(1 for item in selected_items if item_key(item) in retry_keys)
+                selected_updated_items = [item for item in selected_items if item_key(item) in updated_keys]
+                selected_fetch_items = [item for item in selected_items if item_key(item) not in updated_keys]
+                updated_prepared = (
+                    [
+                        PreparedNotice(source=source, notice_id=notice_id, detail=detail)
+                        for notice_id, detail in self.storage.load_updated_seen_details(selected_updated_items)
+                    ]
+                    if selected_updated_items and not options.dry_run
+                    else []
+                )
+                updated_count += len(updated_prepared)
 
                 prepared_notices = fetch_details_for_items(
                     source=source,
                     adapter=adapter,
-                    items=selected_items,
+                    items=selected_fetch_items,
                     dry_run=options.dry_run,
                     failures=failures,
                     storage=self.storage,
@@ -179,6 +193,7 @@ class NoticePipeline:
                     max_workers=detail_worker_count,
                     retry_policy=failure_retry_policy,
                 )
+                prepared_notices = updated_prepared + prepared_notices
 
                 if prepared_notices:
                     self._summarize_notices(
@@ -199,18 +214,26 @@ class NoticePipeline:
                     if active_refresh_seen_details:
                         if active_refresh_seen_limit > 0:
                             seen_items = seen_items[:active_refresh_seen_limit]
-                        refresh_seen_errors.extend(
-                            update_seen_details_if_changed(
-                                source=source,
-                                adapter=adapter,
-                                items=seen_items,
-                                seen_rows=seen_rows,
-                                http_client=self.http_client,
-                                storage=self.storage,
-                                detail_min_chars=self.config.detail_min_chars,
-                                max_workers=active_refresh_seen_workers,
-                            )
+                        refreshed_prepared, refresh_errors = update_seen_details_if_changed(
+                            source=source,
+                            adapter=adapter,
+                            items=seen_items,
+                            seen_rows=seen_rows,
+                            http_client=self.http_client,
+                            storage=self.storage,
+                            detail_min_chars=self.config.detail_min_chars,
+                            max_workers=active_refresh_seen_workers,
                         )
+                        refresh_seen_errors.extend(refresh_errors)
+                        updated_count += len(refreshed_prepared)
+                        if refreshed_prepared:
+                            self._summarize_notices(
+                                refreshed_prepared,
+                                entries,
+                                failures,
+                                max_workers=summary_worker_count,
+                                retry_policy=failure_retry_policy,
+                            )
 
                 if not options.dry_run and options.limit is not None and processed_for_source >= options.limit:
                     break
@@ -229,6 +252,7 @@ class NoticePipeline:
                 retried_count=retried_count,
                 summarized_count=len(entries),
                 manual_review_count=len(failures),
+                updated_count=updated_count,
             )
             markdown = render_report(report_day, entries, failures, stats)
             report_path = write_report(self.config.output_dir, report_day, markdown)
@@ -237,6 +261,7 @@ class NoticePipeline:
         result = PipelineResult(
             report_path=report_path,
             new_count=new_count,
+            updated_count=updated_count,
             summarized_count=len(entries),
             retried_count=retried_count,
             manual_review_count=len(failures),
@@ -313,7 +338,7 @@ class NoticePipeline:
                     str(outcome),
                     failure_type=failure_type,
                     retry_after_hours=retry_policy.after_hours,
-                    retry_limit=retry_policy.limit,
+                    retry_limit=retry_limit_for_failure(failure_type, retry_policy.limit),
                 )
                 continue
 

@@ -19,10 +19,12 @@ def test_load_config_uses_defaults_and_repo_relative_paths(tmp_path):
     assert config.llm_providers["deepseek"].api_key_env == "DEEPSEEK_API_KEY"
     assert config.llm_providers["deepseek"].model_env == "DEEPSEEK_MODEL"
     assert config.llm_providers["deepseek"].default_model == "deepseek-v4-flash"
+    assert config.llm_providers["deepseek"].kind == "openai_text"
     assert config.llm_providers["kimi"].base_url == "https://api.moonshot.cn/v1"
     assert config.llm_providers["kimi"].api_key_env == "KIMI_API_KEY"
     assert config.llm_providers["kimi"].model_env == "KIMI_MODEL"
     assert config.llm_providers["kimi"].default_model == "kimi-k2.7-code"
+    assert config.llm_providers["kimi"].kind == "kimi_multimodal"
     assert config.llm_routing == {"text": "deepseek", "pdf": "kimi", "image": "kimi"}
     assert config.summary_format_repair_retries == 1
     assert config.parsing == ParsingConfig(
@@ -63,7 +65,7 @@ def test_load_config_uses_defaults_and_repo_relative_paths(tmp_path):
     )
     assert config.runtime_profiles["backfill"] == NoticeRuntimeProfile(
         name="backfill",
-        max_pages_per_source=None,
+        max_pages_per_source=80,
         stop_after_seen_pages=None,
         detail_max_workers=4,
         summary_max_workers=3,
@@ -230,11 +232,13 @@ def test_load_config_reads_llm_provider_values_from_yaml(tmp_path):
                 "      api_key_env: CUSTOM_DEEPSEEK_KEY",
                 "      model_env: CUSTOM_DEEPSEEK_MODEL",
                 "      default_model: deepseek-test",
+                "      kind: openai_text",
                 "    kimi:",
                 "      base_url: https://kimi.example/v1",
                 "      api_key_env: CUSTOM_KIMI_KEY",
                 "      model_env: CUSTOM_KIMI_MODEL",
                 "      default_model: kimi-test",
+                "      kind: kimi_multimodal",
                 "  routing:",
                 "    text: deepseek",
                 "    pdf: kimi",
@@ -256,9 +260,11 @@ def test_load_config_reads_llm_provider_values_from_yaml(tmp_path):
     assert config.llm_providers["deepseek"].base_url == "https://deepseek.example/v1"
     assert config.llm_providers["deepseek"].model_env == "CUSTOM_DEEPSEEK_MODEL"
     assert config.llm_providers["deepseek"].default_model == "deepseek-env"
+    assert config.llm_providers["deepseek"].kind == "openai_text"
     assert config.llm_providers["kimi"].base_url == "https://kimi.example/v1"
     assert config.llm_providers["kimi"].model_env == "CUSTOM_KIMI_MODEL"
     assert config.llm_providers["kimi"].default_model == "kimi-env"
+    assert config.llm_providers["kimi"].kind == "kimi_multimodal"
     assert config.llm_routing["text"] == "deepseek"
     assert config.llm_routing["pdf"] == "kimi"
     assert config.llm_routing["image"] == "kimi"
@@ -338,6 +344,33 @@ def test_load_config_reads_audit_policy_from_yaml(tmp_path):
         sample_detail_count=4,
         required_content_kinds=("text", "pdf"),
     )
+
+
+def test_load_config_rejects_routing_to_unknown_llm_provider(tmp_path):
+    config_dir = tmp_path / "resources" / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "runtime.yml").write_text(
+        "\n".join(
+            [
+                "llm:",
+                "  routing:",
+                "    text: missing_provider",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="unknown LLM provider"):
+        load_config(env={}, repo_root=tmp_path)
+
+
+def test_load_config_loads_dotenv_from_repo_root(tmp_path, monkeypatch):
+    (tmp_path / ".env").write_text("DEEPSEEK_MODEL=deepseek-from-dotenv\n", encoding="utf-8")
+    monkeypatch.delenv("DEEPSEEK_MODEL", raising=False)
+
+    config = load_config(repo_root=tmp_path)
+
+    assert config.llm_providers["deepseek"].default_model == "deepseek-from-dotenv"
 
 
 def test_load_config_ignores_legacy_top_level_deepseek_model(tmp_path):

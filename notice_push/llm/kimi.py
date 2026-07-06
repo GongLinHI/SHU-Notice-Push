@@ -8,7 +8,7 @@ from typing import Callable, Optional
 from openai import OpenAI
 
 from notice_push.http import HttpClient
-from notice_push.llm.chat import create_chat_completion_with_retry
+from notice_push.llm.chat import call_with_retry, create_chat_completion_with_retry
 from notice_push.llm.prompts import load_prompt, render_notice_user_prompt
 from notice_push.llm.repair import render_summary_repair_prompt
 from notice_push.parsing.media import download_asset_to_temp, image_path_to_data_url
@@ -85,11 +85,21 @@ class KimiMultimodalSummarizer:
         path = self._downloader(asset)
         file_id = ""
         try:
-            file_object = self._get_client().files.create(file=path, purpose="file-extract")
+            file_object = call_with_retry(
+                lambda: self._get_client().files.create(file=path, purpose="file-extract", timeout=self.timeout),
+                max_retries=self.max_retries,
+                initial_retry_delay=self.initial_retry_delay,
+                retry_backoff=self.retry_backoff,
+            )
             file_id = getattr(file_object, "id")
             if not file_id:
                 raise ValueError("Kimi file upload did not return a file id")
-            file_content = self._get_client().files.content(file_id=file_id).text
+            file_content = call_with_retry(
+                lambda: self._get_client().files.content(file_id=file_id, timeout=self.timeout),
+                max_retries=self.max_retries,
+                initial_retry_delay=self.initial_retry_delay,
+                retry_backoff=self.retry_backoff,
+            ).text
             if not file_content or not file_content.strip():
                 raise ValueError("empty PDF extraction response from Kimi")
             if len(file_content) > self.media_policy.pdf_extracted_text_max_chars:

@@ -8,11 +8,13 @@ llm:
       api_key_env: DEEPSEEK_API_KEY
       model_env: DEEPSEEK_MODEL
       default_model: deepseek-v4-flash
+      kind: openai_text
     kimi:
       base_url: https://api.moonshot.cn/v1
       api_key_env: KIMI_API_KEY
       model_env: KIMI_MODEL
       default_model: kimi-k2.7-code
+      kind: kimi_multimodal
   routing:
     text: deepseek
     pdf: kimi
@@ -85,7 +87,7 @@ profiles:
     llm_initial_retry_delay: 1.0
     llm_retry_backoff: 2.0
   backfill:
-    max_pages_per_source:
+    max_pages_per_source: 80
     stop_after_seen_pages:
     lookback_days: 365
     detail_max_workers: 4

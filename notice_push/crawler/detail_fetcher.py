@@ -4,7 +4,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Optional
 
-from notice_push.crawler.failures import FailureRetryPolicy, UnsupportedContentError, classify_failure
+from notice_push.crawler.failures import (
+    FailureRetryPolicy,
+    UnsupportedContentError,
+    classify_failure,
+    retry_limit_for_failure,
+)
 from notice_push.domain import FailedNotice, NoticeDetail, NoticeSource
 
 
@@ -80,7 +85,7 @@ def fetch_and_store_detail(
                 str(exc),
                 failure_type=failure_type,
                 retry_after_hours=retry_policy.after_hours,
-                retry_limit=retry_policy.limit,
+                retry_limit=retry_limit_for_failure(failure_type, retry_policy.limit),
             )
         return DetailFetchResult(failure=failure)
 

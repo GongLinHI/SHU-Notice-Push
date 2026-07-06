@@ -12,6 +12,7 @@ class ResolvedLLMProvider:
     base_url: str
     api_key: str
     model: str
+    kind: str
 
 
 def resolve_optional_provider(
@@ -25,4 +26,5 @@ def resolve_optional_provider(
         base_url=config.base_url,
         api_key=active_env.get(config.api_key_env, ""),
         model=active_env.get(config.model_env, config.default_model),
+        kind=config.kind,
     )

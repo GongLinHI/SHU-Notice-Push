@@ -245,7 +245,7 @@ def extract_pdfjs_assets(root: Tag, page_url: str) -> list[NoticeAsset]:
 
     for script in root.find_all("script"):
         script_text = script.string or script.get_text("", strip=False)
-        for raw_url in re.findall(r"showVsbpdfIframe\(\s*['\"]([^'\"]+\.pdf)['\"]", script_text, re.I):
+        for raw_url in re.findall(r"showVsbpdfIframe\(\s*['\"]([^'\"]+\.pdf(?:\?[^'\"]*)?)['\"]", script_text, re.I):
             absolute = absolute_url(unquote(raw_url), page_url)
             assets.append(
                 NoticeAsset(
@@ -326,7 +326,7 @@ def _pdf_url_from_pdfjs_viewer(url: str) -> str:
     if not file_values:
         return ""
     file_url = unquote(file_values[0])
-    return file_url if file_url.lower().endswith(".pdf") else ""
+    return file_url if urlparse(file_url).path.lower().endswith(".pdf") else ""
 
 
 def parse_date(text: str) -> Optional[datetime]:

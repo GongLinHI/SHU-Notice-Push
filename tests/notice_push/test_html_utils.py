@@ -7,6 +7,7 @@ from notice_push.parsing.html import (
     absolute_url,
     clean_text,
     extract_image_assets,
+    extract_pdfjs_assets,
     extract_text_blocks,
     infer_content_kind,
     is_external_video_page,
@@ -117,3 +118,37 @@ def test_explicit_parsing_rules_affect_video_domains_and_noise_images():
     assets = extract_image_assets(soup, "https://example.edu/info/1.htm", rules=rules)
 
     assert [asset.url for asset in assets] == ["https://example.edu/images/notice.png"]
+
+
+def test_extract_pdfjs_assets_accepts_file_query_with_pdf_url_query():
+    soup = BeautifulSoup(
+        """
+        <div>
+          <iframe src="/pdfjs/web/viewer.html?file=/__local/textbook.pdf%3Ftoken%3Dabc"></iframe>
+        </div>
+        """,
+        "html.parser",
+    )
+
+    assets = extract_pdfjs_assets(soup, "https://gs.shu.edu.cn/info/1029/172562.htm")
+
+    assert len(assets) == 1
+    assert assets[0].kind == "pdf"
+    assert assets[0].url == "https://gs.shu.edu.cn/__local/textbook.pdf?token=abc"
+
+
+def test_extract_pdfjs_assets_accepts_show_vsbpdfiframe_pdf_with_query():
+    soup = BeautifulSoup(
+        """
+        <script>
+          showVsbpdfIframe('/__local/inspection.pdf?download=true');
+        </script>
+        """,
+        "html.parser",
+    )
+
+    assets = extract_pdfjs_assets(soup, "https://ms.shu.edu.cn/info/1245/91745.htm")
+
+    assert len(assets) == 1
+    assert assets[0].kind == "pdf"
+    assert assets[0].url == "https://ms.shu.edu.cn/__local/inspection.pdf?download=true"

@@ -38,11 +38,12 @@ def test_render_report_groups_summaries_and_failures():
                 published_at=datetime(2026, 6, 29),
             )
         ],
-        stats=ReportStats(new_count=2, retried_count=0, summarized_count=1, manual_review_count=1),
+        stats=ReportStats(new_count=2, updated_count=0, retried_count=0, summarized_count=1, manual_review_count=1),
     )
 
     assert "## 运行概览" in markdown
     assert "- 新增通知: 2" in markdown
+    assert "- 正文更新通知: 0" in markdown
     assert "- 成功摘要: 1" in markdown
     assert "- 按来源统计:" in markdown
     assert "上海大学官网: 处理 1，成功 1，失败 0" in markdown
@@ -62,10 +63,11 @@ def test_render_report_uses_explicit_stats_for_retry_only_report():
         report_date=date(2026, 7, 5),
         entries=[entry],
         failures=[],
-        stats=ReportStats(new_count=0, retried_count=1, summarized_count=1, manual_review_count=0),
+        stats=ReportStats(new_count=0, updated_count=1, retried_count=1, summarized_count=1, manual_review_count=0),
     )
 
     assert "- 新增通知: 0" in markdown
+    assert "- 正文更新通知: 1" in markdown
     assert "- 重试通知: 1" in markdown
     assert "- 成功摘要: 1" in markdown
     assert "新增 1" not in markdown
@@ -101,7 +103,7 @@ def test_render_report_includes_assets_when_attachments_are_empty():
         date(2026, 7, 5),
         [ReportEntry("management_school", "上海大学管理学院", detail, summary)],
         [],
-        ReportStats(new_count=1, retried_count=0, summarized_count=1, manual_review_count=0),
+        ReportStats(new_count=1, updated_count=0, retried_count=0, summarized_count=1, manual_review_count=0),
     )
 
     assert "- **附件**: [值班安排.png](https://ms.shu.edu.cn/__local/duty.png)" in markdown

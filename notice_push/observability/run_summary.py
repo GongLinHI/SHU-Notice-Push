@@ -30,6 +30,7 @@ def _run_summary_payload(report_date: date, pipeline_result: PipelineResult) -> 
     return {
         "report_date": report_date.isoformat(),
         "new_count": counters.new_count,
+        "updated_count": counters.updated_count,
         "retried_count": counters.retried_count,
         "summarized_count": counters.summarized_count,
         "manual_review_count": counters.manual_review_count,
@@ -77,6 +78,7 @@ def pipeline_counters(result: PipelineResult) -> PipelineCounters:
     )
     return PipelineCounters(
         new_count=result.new_count,
+        updated_count=result.updated_count,
         retried_count=result.retried_count,
         summarized_count=result.summarized_count,
         failed_count=len(result.failed),

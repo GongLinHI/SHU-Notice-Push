@@ -31,6 +31,7 @@ def render_report(
             "",
             f"- 报告日期: {report_date.isoformat()}",
             f"- 新增通知: {stats.new_count}",
+            f"- 正文更新通知: {stats.updated_count}",
             f"- 重试通知: {stats.retried_count}",
             f"- 成功摘要: {stats.summarized_count}",
             f"- 需要人工复核: {stats.manual_review_count}",

@@ -10,6 +10,10 @@ from notice_push.domain import NoticeDetail, NoticeListItem, NoticeSource, Notic
 from notice_push.storage.health import storage_health
 from notice_push.storage.notices import save_notice_detail, update_seen_notice_detail_if_changed
 from notice_push.storage.schema import initialize_schema
+from notice_push.storage.serialization import detail_from_row
+
+
+PERMANENT_FAILURE_TYPES = {"unsupported_video_content"}
 
 
 class NoticeStorage:
@@ -73,14 +77,29 @@ class NoticeStorage:
         retry_failed: bool = False,
         failed_retry_limit: int = 0,
     ) -> tuple[list[NoticeListItem], list[NoticeListItem]]:
+        new_items, retry_items, _ = self.split_pipeline_items(
+            items,
+            retry_failed=retry_failed,
+            failed_retry_limit=failed_retry_limit,
+        )
+        return new_items, retry_items
+
+    def split_pipeline_items(
+        self,
+        items: Iterable[NoticeListItem],
+        *,
+        retry_failed: bool = False,
+        failed_retry_limit: int = 0,
+    ) -> tuple[list[NoticeListItem], list[NoticeListItem], list[NoticeListItem]]:
         new_items: list[NoticeListItem] = []
         retry_items: list[NoticeListItem] = []
+        updated_items: list[NoticeListItem] = []
         now = _now()
         with self._write_lock, self._connect() as conn:
             for item in items:
                 row = conn.execute(
                     """
-                    select id, status, failure_count, next_retry_at
+                    select id, status, failure_type, failure_count, next_retry_at
                     from notices
                     where source_id = ? and canonical_url = ?
                     """,
@@ -110,7 +129,9 @@ class NoticeStorage:
                     )
                     if retry_failed and _row_retryable(row, failed_retry_limit, now):
                         retry_items.append(item)
-        return new_items, retry_items
+                    elif row["status"] == "updated_seen":
+                        updated_items.append(item)
+        return new_items, retry_items, updated_items
 
     def find_seen_items(self, items: Iterable[NoticeListItem]) -> dict[str, sqlite3.Row]:
         rows: dict[str, sqlite3.Row] = {}
@@ -165,6 +186,22 @@ class NoticeStorage:
     def update_seen_detail_if_changed(self, notice_id: int, detail: NoticeDetail) -> bool:
         with self._write_lock, self._connect() as conn:
             return update_seen_notice_detail_if_changed(conn, notice_id, detail, _now())
+
+    def load_updated_seen_details(self, items: Iterable[NoticeListItem]) -> list[tuple[int, NoticeDetail]]:
+        details: list[tuple[int, NoticeDetail]] = []
+        with self._connect() as conn:
+            for item in items:
+                row = conn.execute(
+                    """
+                    select *
+                    from notices
+                    where source_id = ? and canonical_url = ? and status = 'updated_seen'
+                    """,
+                    (item.source_id, item.canonical_url),
+                ).fetchone()
+                if row is not None:
+                    details.append((int(row["id"]), detail_from_row(row)))
+        return details
 
     def save_summary(self, notice_id: int, summary: NoticeSummary) -> None:
         with self._write_lock, self._connect() as conn:
@@ -311,6 +348,8 @@ def _dt(value: Optional[datetime]) -> Optional[str]:
 
 def _row_retryable(row: sqlite3.Row, retry_limit: int, now: str) -> bool:
     if row["status"] != "failed":
+        return False
+    if row["failure_type"] in PERMANENT_FAILURE_TYPES:
         return False
     if retry_limit <= 0 or int(row["failure_count"] or 0) >= retry_limit:
         return False

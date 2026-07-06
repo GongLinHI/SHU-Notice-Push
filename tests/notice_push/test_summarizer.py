@@ -3,6 +3,8 @@ from datetime import datetime
 import pytest
 
 from notice_push.domain import Attachment, MediaPolicy, NoticeAsset, NoticeDetail
+from notice_push.http import DownloadedBytes
+from notice_push.parsing import media as media_module
 from notice_push.llm.kimi import KimiMultimodalSummarizer
 from notice_push.llm.prompts import load_prompt, render_notice_user_prompt
 from notice_push.llm.router import SummarizerRouter
@@ -88,10 +90,51 @@ class _FakeFiles:
         self.delete_requests.append(kwargs)
 
 
+class _FlakyCreateFiles(_FakeFiles):
+    def __init__(self):
+        super().__init__()
+        self.create_calls = 0
+
+    def create(self, **kwargs):
+        self.create_calls += 1
+        self.create_requests.append(kwargs)
+        if self.create_calls < 3:
+            raise RuntimeError("temporary Kimi file upload error")
+        return _FakeFileObject("file-test-1")
+
+
+class _FlakyContentFiles(_FakeFiles):
+    def __init__(self, extracted_text: str = "PDF 正文内容"):
+        super().__init__(extracted_text=extracted_text)
+        self.content_calls = 0
+
+    def content(self, **kwargs):
+        self.content_calls += 1
+        self.content_requests.append(kwargs)
+        if self.content_calls < 3:
+            raise RuntimeError("temporary Kimi file extract error")
+        return _FakeFileContent(self.extracted_text)
+
+
+class _AlwaysFailingCreateFiles(_FakeFiles):
+    def create(self, **kwargs):
+        self.create_requests.append(kwargs)
+        raise RuntimeError("temporary Kimi file upload error")
+
+
 class _FakeKimiClient(_FakeClient):
     def __init__(self, extracted_text: str = "PDF 正文内容"):
         super().__init__()
         self.files = _FakeFiles(extracted_text=extracted_text)
+
+
+class _DownloadHttpClient:
+    def __init__(self, content: bytes, content_type: str):
+        self.content = content
+        self.content_type = content_type
+
+    def get_download_limited(self, url: str, max_bytes: int):
+        return DownloadedBytes(content=self.content, content_type=self.content_type)
 
 
 class _FlakyCompletions:
@@ -408,20 +451,21 @@ def test_summarizer_router_sends_text_details_to_text_summarizer(tmp_path):
     (prompt_dir / "notice_summary_v1.md").write_text("系统提示词", encoding="utf-8")
     text_client = _FakeClient()
     kimi_client = _FakeKimiClient()
-    router = SummarizerRouter(
-        text_summarizer=NoticeSummarizer(
+    text_summarizer = NoticeSummarizer(
             prompt_dir=prompt_dir,
             prompt_name="notice_summary_v1",
             model="deepseek-test",
             client=text_client,
-        ),
-        kimi_summarizer=KimiMultimodalSummarizer(
+    )
+    kimi_summarizer = KimiMultimodalSummarizer(
             prompt_dir=prompt_dir,
             prompt_name="notice_summary_v1",
             model="kimi-test",
             client=kimi_client,
             downloader=lambda asset: tmp_path / "unused.bin",
-        ),
+    )
+    router = SummarizerRouter(
+        provider_summarizers={"deepseek": text_summarizer, "kimi": kimi_summarizer},
         routing={"text": "deepseek", "pdf": "kimi", "image": "kimi"},
     )
 
@@ -451,8 +495,8 @@ def test_kimi_pdf_summarizer_extracts_file_content_before_chat(tmp_path):
 
     assert summary.notice_id == 8
     assert summary.model == "kimi-k2.7-code"
-    assert fake_client.files.create_requests == [{"file": pdf_path, "purpose": "file-extract"}]
-    assert fake_client.files.content_requests == [{"file_id": "file-test-1"}]
+    assert fake_client.files.create_requests == [{"file": pdf_path, "purpose": "file-extract", "timeout": 60}]
+    assert fake_client.files.content_requests == [{"file_id": "file-test-1", "timeout": 60}]
     assert fake_client.files.delete_requests == [{"file_id": "file-test-1"}]
     request = fake_client.chat.completions.last_request
     assert request["model"] == "kimi-k2.7-code"
@@ -486,6 +530,95 @@ def test_kimi_pdf_summarizer_limits_extracted_text_before_chat(tmp_path):
         "role": "system",
         "content": "abcd",
     }
+
+
+def test_kimi_pdf_summarizer_retries_file_upload_with_exponential_backoff(tmp_path, monkeypatch):
+    prompt_dir = tmp_path / "prompts"
+    prompt_dir.mkdir()
+    (prompt_dir / "notice_summary_v1.md").write_text("系统提示词", encoding="utf-8")
+    pdf_path = tmp_path / "notice.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 fake")
+    fake_client = _FakeKimiClient(extracted_text="巡察公告 PDF 正文")
+    fake_client.files = _FlakyCreateFiles()
+    sleep_calls = []
+    monkeypatch.setattr("notice_push.llm.chat.time.sleep", sleep_calls.append)
+    summarizer = KimiMultimodalSummarizer(
+        prompt_dir=prompt_dir,
+        prompt_name="notice_summary_v1",
+        model="kimi-k2.7-code",
+        client=fake_client,
+        downloader=lambda asset: pdf_path,
+        timeout=45,
+        max_retries=3,
+        initial_retry_delay=0.5,
+        retry_backoff=2.0,
+    )
+
+    summary = summarizer.summarize(8, make_pdf_detail(), source_name="上海大学管理学院")
+
+    assert summary.markdown == VALID_SUMMARY
+    assert fake_client.files.create_calls == 3
+    assert fake_client.files.create_requests[-1] == {"file": pdf_path, "purpose": "file-extract", "timeout": 45}
+    assert sleep_calls == [0.5, 1.0]
+
+
+def test_kimi_pdf_summarizer_retries_file_content_with_exponential_backoff(tmp_path, monkeypatch):
+    prompt_dir = tmp_path / "prompts"
+    prompt_dir.mkdir()
+    (prompt_dir / "notice_summary_v1.md").write_text("系统提示词", encoding="utf-8")
+    pdf_path = tmp_path / "notice.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 fake")
+    fake_client = _FakeKimiClient(extracted_text="巡察公告 PDF 正文")
+    fake_client.files = _FlakyContentFiles(extracted_text="巡察公告 PDF 正文")
+    sleep_calls = []
+    monkeypatch.setattr("notice_push.llm.chat.time.sleep", sleep_calls.append)
+    summarizer = KimiMultimodalSummarizer(
+        prompt_dir=prompt_dir,
+        prompt_name="notice_summary_v1",
+        model="kimi-k2.7-code",
+        client=fake_client,
+        downloader=lambda asset: pdf_path,
+        timeout=45,
+        max_retries=3,
+        initial_retry_delay=0.5,
+        retry_backoff=2.0,
+    )
+
+    summary = summarizer.summarize(8, make_pdf_detail(), source_name="上海大学管理学院")
+
+    assert summary.markdown == VALID_SUMMARY
+    assert fake_client.files.content_calls == 3
+    assert fake_client.files.content_requests[-1] == {"file_id": "file-test-1", "timeout": 45}
+    assert sleep_calls == [0.5, 1.0]
+
+
+def test_kimi_pdf_summarizer_cleans_downloaded_temp_file_when_upload_fails(tmp_path, monkeypatch):
+    prompt_dir = tmp_path / "prompts"
+    prompt_dir.mkdir()
+    (prompt_dir / "notice_summary_v1.md").write_text("系统提示词", encoding="utf-8")
+    original_named_temporary_file = media_module.tempfile.NamedTemporaryFile
+
+    def named_temporary_file_in_tmp_path(*args, **kwargs):
+        kwargs["dir"] = tmp_path
+        return original_named_temporary_file(*args, **kwargs)
+
+    monkeypatch.setattr(media_module.tempfile, "NamedTemporaryFile", named_temporary_file_in_tmp_path)
+    fake_client = _FakeKimiClient()
+    fake_client.files = _AlwaysFailingCreateFiles()
+    summarizer = KimiMultimodalSummarizer(
+        prompt_dir=prompt_dir,
+        prompt_name="notice_summary_v1",
+        model="kimi-k2.7-code",
+        client=fake_client,
+        http_client=_DownloadHttpClient(b"%PDF-1.4 fake", "application/pdf"),
+        max_retries=1,
+        initial_retry_delay=0,
+    )
+
+    with pytest.raises(RuntimeError, match="temporary Kimi file upload error"):
+        summarizer.summarize(8, make_pdf_detail(), source_name="上海大学管理学院")
+
+    assert list(tmp_path.glob("*.pdf")) == []
 
 
 def test_kimi_image_summarizer_sends_openai_compatible_image_message(tmp_path):

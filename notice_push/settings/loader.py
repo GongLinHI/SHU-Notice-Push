@@ -25,6 +25,9 @@ from notice_push.settings.defaults import (
 from notice_push.settings.profiles import _bool_value, _int_value, runtime_profiles
 
 
+SUPPORTED_LLM_PROVIDER_KINDS = {"openai_text", "kimi_multimodal"}
+
+
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
@@ -135,6 +138,12 @@ def _llm_providers(yaml_config: Mapping[str, Any], env: Mapping[str, str]) -> di
         defaults = DEFAULT_LLM_PROVIDERS.get(provider_id, {})
         model_env = str(provider_config.get("model_env", defaults.get("model_env", f"{provider_id.upper()}_MODEL")))
         default_model = str(provider_config.get("default_model", defaults.get("default_model", "")))
+        kind = str(provider_config.get("kind", defaults.get("kind", "")))
+        if kind not in SUPPORTED_LLM_PROVIDER_KINDS:
+            raise ValueError(
+                f"LLM provider '{provider_id}' has unsupported kind '{kind}'. "
+                f"Supported kinds: {', '.join(sorted(SUPPORTED_LLM_PROVIDER_KINDS))}"
+            )
         providers[provider_id] = LLMProviderConfig(
             name=provider_id,
             base_url=str(provider_config.get("base_url", defaults.get("base_url", ""))),
@@ -143,16 +152,25 @@ def _llm_providers(yaml_config: Mapping[str, Any], env: Mapping[str, str]) -> di
             ),
             model_env=model_env,
             default_model=env.get(model_env, default_model),
+            kind=kind,
         )
     return providers
 
 
-def _llm_routing(yaml_config: Mapping[str, Any]) -> dict[str, str]:
+def _llm_routing(yaml_config: Mapping[str, Any], providers: Mapping[str, LLMProviderConfig]) -> dict[str, str]:
     routing = dict(DEFAULT_LLM_ROUTING)
     yaml_routing = _yaml_value(yaml_config, "llm", "routing", default={}) or {}
     if not isinstance(yaml_routing, Mapping):
         raise ValueError("Runtime config 'llm.routing' must be a mapping")
     routing.update({str(key): str(value) for key, value in yaml_routing.items()})
+    missing = sorted({provider_id for provider_id in routing.values() if provider_id not in providers})
+    if missing:
+        raise ValueError(
+            "Runtime config 'llm.routing' references unknown LLM provider(s): "
+            + ", ".join(missing)
+            + ". Available providers: "
+            + ", ".join(sorted(providers))
+        )
     return routing
 
 
@@ -224,7 +242,7 @@ def load_config(
     yaml_config = _load_yaml_config(root)
 
     if env is None:
-        load_dotenv()
+        load_dotenv(root / ".env")
         env = os.environ
 
     resolved_state_path = state_path or root / "resources" / "notice_state.sqlite3"
@@ -237,7 +255,7 @@ def load_config(
         output_dir=Path(resolved_output_dir),
         prompt_name=str(_yaml_value(yaml_config, "prompt_name", default="notice_summary_v1")),
         llm_providers=llm_providers,
-        llm_routing=_llm_routing(yaml_config),
+        llm_routing=_llm_routing(yaml_config, llm_providers),
         summary_format_repair_retries=_int_value(
             _yaml_value(yaml_config, "llm", "summary_format_repair_retries", default=1),
             1,

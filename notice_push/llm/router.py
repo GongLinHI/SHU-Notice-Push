@@ -6,12 +6,9 @@ from notice_push.domain import NoticeDetail, NoticeSummary
 
 
 class SummarizerRouter:
-    def __init__(self, text_summarizer, kimi_summarizer, routing: dict[str, str]):
+    def __init__(self, provider_summarizers: dict[str, object], routing: dict[str, str]):
         self.routing = dict(routing)
-        self.provider_summarizers = {
-            "deepseek": text_summarizer,
-            "kimi": kimi_summarizer,
-        }
+        self.provider_summarizers = dict(provider_summarizers)
 
     def summarize(self, notice_id: int, detail: NoticeDetail, source_name: Optional[str] = None) -> NoticeSummary:
         content_kind = detail.content_kind or "text"
