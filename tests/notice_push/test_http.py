@@ -5,14 +5,18 @@ from src.notice_push.http import HttpClient
 
 
 class _FakeResponse:
-    def __init__(self, content: bytes, encoding: str | None = None):
+    def __init__(self, content: bytes, encoding: str | None = None, headers=None):
         self.content = content
         self.encoding = encoding
         self.apparent_encoding = "utf-8"
+        self.headers = headers or {}
         self.raised = False
 
     def raise_for_status(self):
         self.raised = True
+
+    def iter_content(self, chunk_size=8192):
+        yield self.content
 
 
 class _FakeSession:
@@ -129,3 +133,38 @@ def test_http_client_uses_thread_local_sessions_from_factory():
 
     assert len(created_sessions) == 2
     assert all(session.calls == 1 for session in created_sessions)
+
+
+def test_http_client_get_bytes_limited_streams_until_limit():
+    response = _FakeResponse(b"abcde")
+    session = _FakeSession(response)
+    client = HttpClient(session=session, timeout=8, user_agent="test-agent")
+
+    content = client.get_bytes_limited("https://example.com/file.pdf", max_bytes=5)
+
+    assert content == b"abcde"
+    assert session.last_request == (
+        "https://example.com/file.pdf",
+        {"timeout": 8, "headers": {"User-Agent": "test-agent"}, "stream": True},
+    )
+
+
+def test_http_client_get_bytes_limited_rejects_oversized_download():
+    response = _FakeResponse(b"abcdef")
+    client = HttpClient(session=_FakeSession(response))
+
+    with pytest.raises(ValueError, match="download exceeds max_bytes"):
+        client.get_bytes_limited("https://example.com/file.pdf", max_bytes=5)
+
+
+def test_http_client_get_download_limited_returns_content_type():
+    response = _FakeResponse(
+        b"%PDF-1.7",
+        headers={"content-type": "application/pdf; charset=binary"},
+    )
+    client = HttpClient(session=_FakeSession(response))
+
+    downloaded = client.get_download_limited("https://example.com/download?id=1", max_bytes=1024)
+
+    assert downloaded.content == b"%PDF-1.7"
+    assert downloaded.content_type == "application/pdf"

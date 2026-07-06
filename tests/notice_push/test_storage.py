@@ -291,6 +291,33 @@ def test_storage_uses_temporary_database_only(tmp_path):
         assert conn.execute("select count(*) from sources").fetchone()[0] == 3
 
 
+def test_storage_records_schema_migration_version(tmp_path):
+    config = load_config(env={}, repo_root=tmp_path)
+    db_path = tmp_path / "state.sqlite3"
+    storage = NoticeStorage(db_path, config.sources)
+
+    storage.initialize()
+
+    with sqlite3.connect(db_path) as conn:
+        versions = [row[0] for row in conn.execute("select version from schema_migrations")]
+
+    assert "2026_07_06_baseline" in versions
+
+
+def test_storage_health_reports_existing_database(tmp_path):
+    config = load_config(env={}, repo_root=tmp_path)
+    db_path = tmp_path / "state.sqlite3"
+    storage = NoticeStorage(db_path, config.sources)
+    storage.initialize()
+
+    health = storage.health_check()
+
+    assert health.exists is True
+    assert health.source_count == 3
+    assert health.notice_count == 0
+    assert health.schema_versions == ("2026_07_06_baseline",)
+
+
 def test_storage_initializes_media_metadata_columns(tmp_path):
     config = load_config(env={}, repo_root=tmp_path)
     db_path = tmp_path / "state.sqlite3"
@@ -317,6 +344,19 @@ def test_storage_configures_sqlite_for_concurrent_writes(tmp_path):
 
     assert storage._write_lock.acquire(blocking=False)
     storage._write_lock.release()
+
+
+def test_storage_checkpoint_truncates_wal_file(tmp_path):
+    config = load_config(env={}, repo_root=tmp_path)
+    db_path = tmp_path / "state.sqlite3"
+    storage = NoticeStorage(db_path, config.sources)
+    storage.initialize()
+    storage.upsert_seen_item(make_item("shu_official", "https://example.com/wal.htm"))
+
+    storage.checkpoint()
+
+    wal_path = tmp_path / "state.sqlite3-wal"
+    assert not wal_path.exists() or wal_path.stat().st_size == 0
 
 
 def test_storage_saves_media_metadata_for_detail(tmp_path):

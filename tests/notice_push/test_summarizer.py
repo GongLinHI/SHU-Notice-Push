@@ -2,7 +2,7 @@ from datetime import datetime
 
 import pytest
 
-from src.notice_push.models import Attachment, NoticeAsset, NoticeDetail
+from src.notice_push.models import Attachment, MediaPolicy, NoticeAsset, NoticeDetail
 from src.notice_push.summarizer import (
     KimiMultimodalSummarizer,
     NoticeSummarizer,
@@ -10,20 +10,34 @@ from src.notice_push.summarizer import (
     load_prompt,
     render_notice_user_prompt,
 )
+from src.notice_push.summary_validator import normalize_summary_markdown, validate_summary_markdown
+
+
+VALID_SUMMARY = "\n".join(
+    [
+        "## 官网|行政|周常事务|测试通知",
+        "- **发布时间**: 2026-06-16",
+        "- **影响对象**: 全校师生",
+        "- **核心信息**: 测试通知核心内容",
+        "- **行动指引**: 按要求办理",
+        "- **截止时间**: 未提及",
+        "- **相关链接**: 未提及",
+    ]
+)
 
 
 class _FakeMessage:
-    def __init__(self, content: str = "## 官网|行政|周常事务|测试通知"):
+    def __init__(self, content: str = VALID_SUMMARY):
         self.content = content
 
 
 class _FakeChoice:
-    def __init__(self, content: str = "## 官网|行政|周常事务|测试通知"):
+    def __init__(self, content: str = VALID_SUMMARY):
         self.message = _FakeMessage(content)
 
 
 class _FakeResponse:
-    def __init__(self, content: str = "## 官网|行政|周常事务|测试通知"):
+    def __init__(self, content: str = VALID_SUMMARY):
         self.choices = [_FakeChoice(content)]
 
 
@@ -103,6 +117,22 @@ class _EmptyCompletions:
     def create(self, **kwargs):
         self.calls += 1
         return _FakeResponse("")
+
+
+class _InvalidSummaryCompletions:
+    def create(self, **kwargs):
+        return _FakeResponse("## 官网|行政|周常事务|测试通知\n- 缺少结构化字段")
+
+
+class _RepairableSummaryCompletions:
+    def __init__(self):
+        self.requests = []
+
+    def create(self, **kwargs):
+        self.requests.append(kwargs)
+        if len(self.requests) == 1:
+            return _FakeResponse("## 官网|行政|周常事务|测试通知\n- 缺少结构化字段")
+        return _FakeResponse(VALID_SUMMARY)
 
 
 def make_detail(content: str = "详情页正文包含完整办理要求。") -> NoticeDetail:
@@ -195,6 +225,25 @@ def test_load_prompt_rejects_missing_prompt(tmp_path):
         load_prompt(tmp_path, "missing")
 
 
+def test_summary_validator_normalizes_full_width_colon_fields():
+    markdown = "\n".join(
+        [
+            "## 官网|行政|周常事务|测试通知",
+            "- **发布时间：** 2026-06-16",
+            "- **影响对象：** 全校师生",
+            "- **核心信息：** 核心内容",
+            "- **行动指引：** 按要求办理",
+            "- **截止时间：** 未提及",
+            "- **相关链接：** 未提及",
+        ]
+    )
+
+    normalized = normalize_summary_markdown(markdown)
+
+    assert "- **发布时间**: 2026-06-16" in normalized
+    validate_summary_markdown(normalized)
+
+
 def test_summarizer_uses_detail_content_and_fake_client(tmp_path):
     prompt_dir = tmp_path / "prompts"
     prompt_dir.mkdir()
@@ -210,7 +259,7 @@ def test_summarizer_uses_detail_content_and_fake_client(tmp_path):
     summary = summarizer.summarize(42, make_detail())
 
     assert summary.notice_id == 42
-    assert summary.markdown == "## 官网|行政|周常事务|测试通知"
+    assert summary.markdown == VALID_SUMMARY
     request = fake_client.chat.completions.last_request
     assert request["model"] == "test-model"
     assert request["messages"][0] == {"role": "system", "content": "系统提示词"}
@@ -260,7 +309,7 @@ def test_summarizer_retries_with_exponential_backoff_and_timeout(tmp_path, monke
 
     summary = summarizer.summarize(42, make_detail())
 
-    assert summary.markdown == "## 官网|行政|周常事务|测试通知"
+    assert summary.markdown == VALID_SUMMARY
     assert fake_client.chat.completions.calls == 3
     assert fake_client.chat.completions.last_request["timeout"] == 45
     assert sleep_calls == [0.5, 1.0]
@@ -285,6 +334,45 @@ def test_summarizer_treats_empty_model_response_as_failure(tmp_path):
         summarizer.summarize(42, make_detail())
 
     assert fake_client.chat.completions.calls == 2
+
+
+def test_summarizer_rejects_invalid_summary_markdown(tmp_path):
+    prompt_dir = tmp_path / "prompts"
+    prompt_dir.mkdir()
+    (prompt_dir / "notice_summary_v1.md").write_text("系统提示词", encoding="utf-8")
+    fake_client = _FakeClient()
+    fake_client.chat.completions = _InvalidSummaryCompletions()
+    summarizer = NoticeSummarizer(
+        prompt_dir=prompt_dir,
+        prompt_name="notice_summary_v1",
+        model="test-model",
+        client=fake_client,
+        max_retries=1,
+    )
+
+    with pytest.raises(ValueError, match="summary missing required field"):
+        summarizer.summarize(42, make_detail())
+
+
+def test_summarizer_repairs_invalid_summary_format_once(tmp_path):
+    prompt_dir = tmp_path / "prompts"
+    prompt_dir.mkdir()
+    (prompt_dir / "notice_summary_v1.md").write_text("系统提示词", encoding="utf-8")
+    fake_client = _FakeClient()
+    fake_client.chat.completions = _RepairableSummaryCompletions()
+    summarizer = NoticeSummarizer(
+        prompt_dir=prompt_dir,
+        prompt_name="notice_summary_v1",
+        model="test-model",
+        client=fake_client,
+        summary_format_repair_retries=1,
+    )
+
+    summary = summarizer.summarize(42, make_detail())
+
+    assert summary.markdown == VALID_SUMMARY
+    assert len(fake_client.chat.completions.requests) == 2
+    assert "待修复摘要" in fake_client.chat.completions.requests[1]["messages"][1]["content"]
 
 
 def test_summarizer_rejects_empty_detail_content_without_using_excerpt(tmp_path):
@@ -377,6 +465,30 @@ def test_kimi_pdf_summarizer_extracts_file_content_before_chat(tmp_path):
     assert "正文：巡察公告 PDF 正文" not in request["messages"][2]["content"]
     assert "temperature" not in request
     assert "thinking" not in request
+
+
+def test_kimi_pdf_summarizer_limits_extracted_text_before_chat(tmp_path):
+    prompt_dir = tmp_path / "prompts"
+    prompt_dir.mkdir()
+    (prompt_dir / "notice_summary_v1.md").write_text("系统提示词", encoding="utf-8")
+    pdf_path = tmp_path / "notice.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 fake")
+    fake_client = _FakeKimiClient(extracted_text="abcdefghij")
+    summarizer = KimiMultimodalSummarizer(
+        prompt_dir=prompt_dir,
+        prompt_name="notice_summary_v1",
+        model="kimi-k2.7-code",
+        client=fake_client,
+        downloader=lambda asset: pdf_path,
+        media_policy=MediaPolicy(pdf_extracted_text_max_chars=4),
+    )
+
+    summarizer.summarize(8, make_pdf_detail(), source_name="上海大学管理学院")
+
+    assert fake_client.chat.completions.last_request["messages"][1] == {
+        "role": "system",
+        "content": "abcd",
+    }
 
 
 def test_kimi_image_summarizer_sends_openai_compatible_image_message(tmp_path):

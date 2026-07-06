@@ -1,10 +1,11 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from src.notice_push.__main__ import build_pipeline, main
 from src.notice_push.config import load_config
-from src.notice_push.models import PipelineResult, PipelineRunOptions
+from src.notice_push.models import MediaPolicy, PipelineResult, PipelineRunOptions, SourceAuditIssue, SourceAuditResult
 from src.notice_push.summarizer import KimiMultimodalSummarizer, NoticeSummarizer, SummarizerRouter
 
 
@@ -17,9 +18,39 @@ class FakePipeline:
         return PipelineResult(report_path=None, new_count=0, summarized_count=0)
 
 
+def _write_doctor_repo_files(root: Path, prompt_text: str | None = None) -> None:
+    (root / "resources" / "config").mkdir(parents=True)
+    (root / "resources" / "config" / "runtime.yml").write_text("sources: {}\n", encoding="utf-8")
+    (root / "resources" / "prompts").mkdir(parents=True)
+    (root / "resources" / "prompts" / "notice_summary_v1.md").write_text(
+        prompt_text
+        or "\n".join(
+            [
+                "- **发布时间**: ...",
+                "- **影响对象**: ...",
+                "- **核心信息**: ...",
+                "- **行动指引**: ...",
+                "- **截止时间**: ...",
+                "- **相关链接**: ...",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (root / ".github" / "workflows").mkdir(parents=True)
+    (root / ".github" / "workflows" / "daily_report.yml").write_text(
+        "name: Daily\non: workflow_dispatch\njobs: {}\n",
+        encoding="utf-8",
+    )
+    (root / ".github" / "workflows" / "ci.yml").write_text(
+        "name: CI\non: workflow_dispatch\njobs: {}\n",
+        encoding="utf-8",
+    )
+
+
 def test_cli_passes_runtime_flags_and_dry_run_returns_success(monkeypatch, tmp_path):
     fake_pipeline = FakePipeline()
     captured = {}
+    monkeypatch.delenv("GITHUB_SHA", raising=False)
 
     def fake_build_pipeline(config, profile):
         captured["config"] = config
@@ -67,6 +98,7 @@ def test_cli_passes_runtime_flags_and_dry_run_returns_success(monkeypatch, tmp_p
         refresh_seen_details=False,
         refresh_seen_max_workers=1,
         refresh_seen_limit=0,
+        audit_sources=True,
     )
     assert fake_pipeline.last_options.report_date.isoformat() == "2026-06-30"
 
@@ -140,6 +172,17 @@ def test_cli_prefers_explicit_runtime_flags_over_profile(monkeypatch):
     assert fake_pipeline.last_options.stop_after_seen_pages == 4
     assert fake_pipeline.last_options.detail_max_workers == 6
     assert fake_pipeline.last_options.summary_max_workers == 7
+
+
+def test_cli_can_skip_source_audit(monkeypatch):
+    fake_pipeline = FakePipeline()
+
+    monkeypatch.setattr("src.notice_push.__main__.build_pipeline", lambda config, profile: fake_pipeline)
+
+    exit_code = main(["--dry-run", "--skip-source-audit"])
+
+    assert exit_code == 0
+    assert fake_pipeline.last_options.audit_sources is False
 
 
 def test_cli_rejects_unknown_source_before_running_pipeline(monkeypatch):
@@ -216,6 +259,136 @@ def test_cli_prints_source_error_count_for_no_report(monkeypatch, tmp_path, caps
     assert "source_error_count=1" in output
 
 
+def test_cli_prints_audit_counts(monkeypatch, tmp_path, capsys):
+    class AuditPipeline:
+        def run(self, options):
+            return PipelineResult(
+                report_path=None,
+                new_count=0,
+                summarized_count=0,
+                audit_results=(
+                    SourceAuditResult(
+                        source_id="shu_official",
+                        source_name="上海大学官网",
+                        list_url="https://www.shu.edu.cn/tzgg.htm",
+                        list_item_count=0,
+                        issues=(
+                            SourceAuditIssue(
+                                source_id="shu_official",
+                                source_name="上海大学官网",
+                                url="https://www.shu.edu.cn/tzgg.htm",
+                                severity="error",
+                                reason="list page parsed 0 items",
+                            ),
+                            SourceAuditIssue(
+                                source_id="shu_official",
+                                source_name="上海大学官网",
+                                url="https://www.shu.edu.cn/info/1051/test.htm",
+                                severity="warning",
+                                reason="sample detail failed",
+                            ),
+                        ),
+                    ),
+                ),
+            )
+
+    monkeypatch.setattr("src.notice_push.__main__.build_pipeline", lambda config, profile: AuditPipeline())
+
+    assert main(["--state-path", str(tmp_path / "state.sqlite3"), "--output-dir", str(tmp_path)]) == 1
+    output = capsys.readouterr().out
+    assert "audit_error_count=1" in output
+    assert "audit_warning_count=1" in output
+
+
+def test_cli_audit_only_returns_one_for_audit_errors_without_building_pipeline(monkeypatch, tmp_path, capsys):
+    def fail_build_pipeline(config, profile):
+        raise AssertionError("audit-only should not initialize the full pipeline")
+
+    def fake_run_source_audit(config, profile, source_ids):
+        return (
+            SourceAuditResult(
+                source_id="shu_official",
+                source_name="上海大学官网",
+                list_url="https://www.shu.edu.cn/tzgg.htm",
+                list_item_count=0,
+                issues=(
+                    SourceAuditIssue(
+                        source_id="shu_official",
+                        source_name="上海大学官网",
+                        url="https://www.shu.edu.cn/tzgg.htm",
+                        severity="error",
+                        reason="list page parsed 0 items",
+                    ),
+                ),
+            ),
+        )
+
+    monkeypatch.setattr("src.notice_push.__main__.build_pipeline", fail_build_pipeline)
+    monkeypatch.setattr("src.notice_push.__main__.run_source_audit", fake_run_source_audit)
+
+    exit_code = main(["--audit-only", "--state-path", str(tmp_path / "state.sqlite3")])
+
+    assert exit_code == 1
+    output = capsys.readouterr().out
+    assert "audit_error_count=1" in output
+    assert "audit_warning_count=0" in output
+
+
+def test_cli_doctor_warns_without_building_pipeline(monkeypatch, tmp_path, capsys):
+    def fail_build_pipeline(config, profile):
+        raise AssertionError("doctor should not initialize the full pipeline")
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "")
+    monkeypatch.setenv("KIMI_API_KEY", "")
+    monkeypatch.setattr("src.notice_push.__main__.build_pipeline", fail_build_pipeline)
+
+    exit_code = main(["--doctor", "--state-path", str(tmp_path / "state.sqlite3")])
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "doctor_warning=DEEPSEEK_API_KEY is not set" in output
+    assert "doctor_warning=KIMI_API_KEY is not set" in output
+
+
+def test_cli_doctor_returns_two_for_structural_errors(monkeypatch, tmp_path, capsys):
+    def fake_run_doctor(config):
+        return ("error: no enabled sources", "warning: KIMI_API_KEY is not set")
+
+    monkeypatch.setattr("src.notice_push.__main__.run_doctor", fake_run_doctor)
+
+    exit_code = main(["--doctor", "--state-path", str(tmp_path / "state.sqlite3")])
+
+    assert exit_code == 2
+    output = capsys.readouterr().out
+    assert "doctor_error=no enabled sources" in output
+    assert "doctor_warning=KIMI_API_KEY is not set" in output
+
+
+def test_cli_doctor_reports_prompt_field_errors(monkeypatch, tmp_path, capsys):
+    _write_doctor_repo_files(tmp_path, prompt_text="输出要求缺少结构化字段")
+    config = load_config(env={}, repo_root=tmp_path, state_path=tmp_path / "state.sqlite3")
+    monkeypatch.setattr("src.notice_push.__main__.load_config", lambda **kwargs: config)
+
+    exit_code = main(["--doctor"])
+
+    assert exit_code == 2
+    output = capsys.readouterr().out
+    assert "doctor_error=prompt missing summary fields" in output
+
+
+def test_cli_doctor_reports_invalid_media_policy(monkeypatch, tmp_path, capsys):
+    _write_doctor_repo_files(tmp_path)
+    config = load_config(env={}, repo_root=tmp_path, state_path=tmp_path / "state.sqlite3")
+    config = replace(config, media_policy=MediaPolicy(pdf_max_bytes=0, image_max_bytes=1, pdf_extracted_text_max_chars=1))
+    monkeypatch.setattr("src.notice_push.__main__.load_config", lambda **kwargs: config)
+
+    exit_code = main(["--doctor"])
+
+    assert exit_code == 2
+    output = capsys.readouterr().out
+    assert "doctor_error=media policy values must be positive" in output
+
+
 def test_cli_prints_retry_and_manual_review_counts(monkeypatch, tmp_path, capsys):
     class RetryPipeline:
         def run(self, options):
@@ -234,6 +407,25 @@ def test_cli_prints_retry_and_manual_review_counts(monkeypatch, tmp_path, capsys
     assert "new_count=0" in output
     assert "retried_count=1" in output
     assert "manual_review_count=1" in output
+
+
+def test_cli_prints_run_summary_path(monkeypatch, tmp_path, capsys):
+    class RunSummaryPipeline:
+        def run(self, options):
+            return PipelineResult(
+                report_path=Path("resources/results/2026-06-30.md"),
+                run_summary_path=Path("resources/results/json/2026-06-30.json"),
+                new_count=1,
+                summarized_count=1,
+            )
+
+    monkeypatch.setattr("src.notice_push.__main__.build_pipeline", lambda config, profile: RunSummaryPipeline())
+
+    assert main(["--state-path", str(tmp_path / "state.sqlite3"), "--output-dir", str(tmp_path)]) == 0
+    output = capsys.readouterr().out
+    assert "run_summary_path=resources\\results\\json\\2026-06-30.json" in output or (
+        "run_summary_path=resources/results/json/2026-06-30.json" in output
+    )
 
 
 def test_build_pipeline_constructs_router_from_llm_provider_config(monkeypatch, tmp_path):

@@ -17,6 +17,7 @@ llm:
     text: deepseek
     pdf: kimi
     image: kimi
+  summary_format_repair_retries: 1
 
 parsing:
   external_video_domains:
@@ -29,6 +30,19 @@ parsing:
     - qr
     - blank
     - spacer
+
+media:
+  pdf_max_bytes: 20971520
+  image_max_bytes: 8388608
+  pdf_extracted_text_max_chars: 50000
+
+audit:
+  min_list_items: 1
+  sample_detail_count: 3
+  required_content_kinds:
+    - text
+    - pdf
+    - image
 
 sources:
   shu_official:

@@ -72,6 +72,7 @@ class FailedNotice:
     reason: str
     published_at: Optional[datetime] = None
     source_name: str = ""
+    failure_type: str = ""
 
 
 @dataclass(frozen=True)
@@ -83,6 +84,65 @@ class SourceError:
 
 
 @dataclass(frozen=True)
+class SourceAuditIssue:
+    source_id: str
+    source_name: str
+    url: str
+    severity: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class SourceAuditSample:
+    title: str
+    url: str
+    content_kind: str
+    content_length: int
+    asset_count: int
+
+
+@dataclass(frozen=True)
+class SourceAuditResult:
+    source_id: str
+    source_name: str
+    list_url: str
+    list_item_count: int
+    sampled_detail_url: str = ""
+    detail_content_kind: str = ""
+    samples: tuple[SourceAuditSample, ...] = field(default_factory=tuple)
+    issues: tuple[SourceAuditIssue, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class RefreshSeenError:
+    source_id: str
+    source_name: str
+    title: str
+    url: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class PipelineSourceStats:
+    source_id: str
+    source_name: str
+    summarized_count: int = 0
+    failed_count: int = 0
+    source_error_count: int = 0
+    audit_error_count: int = 0
+    audit_warning_count: int = 0
+    refresh_seen_error_count: int = 0
+
+
+@dataclass(frozen=True)
+class StorageHealth:
+    exists: bool
+    source_count: int
+    notice_count: int
+    schema_versions: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class PipelineResult:
     report_path: Optional[Path]
     new_count: int
@@ -91,6 +151,29 @@ class PipelineResult:
     manual_review_count: int = 0
     failed: tuple[FailedNotice, ...] = field(default_factory=tuple)
     source_errors: tuple[SourceError, ...] = field(default_factory=tuple)
+    audit_results: tuple[SourceAuditResult, ...] = field(default_factory=tuple)
+    run_summary_path: Optional[Path] = None
+    refresh_seen_errors: tuple[RefreshSeenError, ...] = field(default_factory=tuple)
+    source_stats: tuple[PipelineSourceStats, ...] = field(default_factory=tuple)
+    models_used: tuple[str, ...] = field(default_factory=tuple)
+    media_counts: dict[str, int] = field(default_factory=dict)
+    started_at: str = ""
+    finished_at: str = ""
+    duration_seconds: float = 0.0
+    git_sha: str = ""
+
+
+@dataclass(frozen=True)
+class PipelineCounters:
+    new_count: int
+    retried_count: int
+    summarized_count: int
+    failed_count: int
+    manual_review_count: int
+    source_error_count: int
+    audit_error_count: int
+    audit_warning_count: int
+    refresh_seen_error_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -119,6 +202,8 @@ class PipelineRunOptions:
     refresh_seen_max_workers: int = 1
     refresh_seen_limit: int = 0
     bootstrap_seen: bool = False
+    audit_sources: bool = True
+    git_sha: str = ""
 
 
 @dataclass(frozen=True)
@@ -160,6 +245,20 @@ class ParsingConfig:
 
 
 @dataclass(frozen=True)
+class MediaPolicy:
+    pdf_max_bytes: int = 20971520
+    image_max_bytes: int = 8388608
+    pdf_extracted_text_max_chars: int = 50000
+
+
+@dataclass(frozen=True)
+class AuditPolicy:
+    min_list_items: int = 1
+    sample_detail_count: int = 3
+    required_content_kinds: tuple[str, ...] = ("text", "pdf", "image")
+
+
+@dataclass(frozen=True)
 class AppConfig:
     repo_root: Path
     state_path: Path
@@ -167,7 +266,10 @@ class AppConfig:
     prompt_name: str
     llm_providers: dict[str, LLMProviderConfig]
     llm_routing: dict[str, str]
+    summary_format_repair_retries: int
     parsing: ParsingConfig
+    media_policy: MediaPolicy
+    audit_policy: AuditPolicy
     detail_min_chars: int
     runtime_profiles: dict[str, NoticeRuntimeProfile]
     sources: tuple[NoticeSource, ...]

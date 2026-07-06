@@ -7,7 +7,15 @@ from typing import Any, Mapping, Optional
 from dotenv import load_dotenv
 import yaml
 
-from src.notice_push.models import AppConfig, LLMProviderConfig, NoticeRuntimeProfile, NoticeSource, ParsingConfig
+from src.notice_push.models import (
+    AppConfig,
+    AuditPolicy,
+    LLMProviderConfig,
+    MediaPolicy,
+    NoticeRuntimeProfile,
+    NoticeSource,
+    ParsingConfig,
+)
 
 
 PROFILE_DEFAULTS: dict[str, dict[str, Any]] = {
@@ -84,6 +92,8 @@ DEFAULT_LLM_PROVIDERS: dict[str, dict[str, str]] = {
 }
 DEFAULT_LLM_ROUTING = {"text": "deepseek", "pdf": "kimi", "image": "kimi"}
 DEFAULT_PARSING = ParsingConfig()
+DEFAULT_MEDIA_POLICY = MediaPolicy()
+DEFAULT_AUDIT_POLICY = AuditPolicy()
 
 
 def _repo_root() -> Path:
@@ -289,6 +299,38 @@ def _parsing_config(yaml_config: Mapping[str, Any]) -> ParsingConfig:
     )
 
 
+def _media_policy(yaml_config: Mapping[str, Any]) -> MediaPolicy:
+    yaml_media = _yaml_value(yaml_config, "media", default={}) or {}
+    if not isinstance(yaml_media, Mapping):
+        raise ValueError("Runtime config 'media' must be a mapping")
+    return MediaPolicy(
+        pdf_max_bytes=_int_value(yaml_media.get("pdf_max_bytes"), DEFAULT_MEDIA_POLICY.pdf_max_bytes),
+        image_max_bytes=_int_value(yaml_media.get("image_max_bytes"), DEFAULT_MEDIA_POLICY.image_max_bytes),
+        pdf_extracted_text_max_chars=_int_value(
+            yaml_media.get("pdf_extracted_text_max_chars"),
+            DEFAULT_MEDIA_POLICY.pdf_extracted_text_max_chars,
+        ),
+    )
+
+
+def _audit_policy(yaml_config: Mapping[str, Any]) -> AuditPolicy:
+    yaml_audit = _yaml_value(yaml_config, "audit", default={}) or {}
+    if not isinstance(yaml_audit, Mapping):
+        raise ValueError("Runtime config 'audit' must be a mapping")
+    return AuditPolicy(
+        min_list_items=_int_value(yaml_audit.get("min_list_items"), DEFAULT_AUDIT_POLICY.min_list_items),
+        sample_detail_count=_int_value(
+            yaml_audit.get("sample_detail_count"),
+            DEFAULT_AUDIT_POLICY.sample_detail_count,
+        ),
+        required_content_kinds=_string_tuple(
+            yaml_audit.get("required_content_kinds"),
+            DEFAULT_AUDIT_POLICY.required_content_kinds,
+            "audit.required_content_kinds",
+        ),
+    )
+
+
 def _string_tuple(raw, default: tuple[str, ...], key: str) -> tuple[str, ...]:
     if raw is None:
         return default
@@ -321,7 +363,13 @@ def load_config(
         prompt_name=str(_yaml_value(yaml_config, "prompt_name", default="notice_summary_v1")),
         llm_providers=llm_providers,
         llm_routing=_llm_routing(yaml_config),
+        summary_format_repair_retries=_int_value(
+            _yaml_value(yaml_config, "llm", "summary_format_repair_retries", default=1),
+            1,
+        ),
         parsing=_parsing_config(yaml_config),
+        media_policy=_media_policy(yaml_config),
+        audit_policy=_audit_policy(yaml_config),
         detail_min_chars=int(_yaml_value(yaml_config, "detail_min_chars", default=30)),
         runtime_profiles=_runtime_profiles(yaml_config),
         sources=_default_sources(yaml_config),

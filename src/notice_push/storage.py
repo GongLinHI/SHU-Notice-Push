@@ -8,7 +8,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, Optional
 
-from src.notice_push.models import NoticeDetail, NoticeListItem, NoticeSource, NoticeSummary
+from src.notice_push.models import NoticeDetail, NoticeListItem, NoticeSource, NoticeSummary, StorageHealth
+from src.notice_push.storage_migrations import ensure_schema_migrations, record_baseline_migration
 
 
 class NoticeStorage:
@@ -21,6 +22,7 @@ class NoticeStorage:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._write_lock, self._connect() as conn:
             conn.execute("pragma journal_mode = wal")
+            ensure_schema_migrations(conn)
             conn.executescript(
                 """
                 create table if not exists sources (
@@ -70,6 +72,7 @@ class NoticeStorage:
             )
             self._ensure_notice_columns(conn)
             now = _now()
+            record_baseline_migration(conn, now)
             for source in self.sources:
                 conn.execute(
                     """
@@ -415,6 +418,37 @@ class NoticeStorage:
         with self._connect() as conn:
             return int(conn.execute("select count(*) from sources").fetchone()[0])
 
+    def health_check(self) -> StorageHealth:
+        if not self.db_path.exists():
+            return StorageHealth(
+                exists=False,
+                source_count=0,
+                notice_count=0,
+                schema_versions=(),
+            )
+
+        with self._connect() as conn:
+            source_count = _table_count(conn, "sources")
+            notice_count = _table_count(conn, "notices")
+            schema_versions = tuple(
+                row["version"]
+                for row in conn.execute(
+                    "select version from schema_migrations order by applied_at, version"
+                ).fetchall()
+            ) if _table_exists(conn, "schema_migrations") else ()
+        return StorageHealth(
+            exists=True,
+            source_count=source_count,
+            notice_count=notice_count,
+            schema_versions=schema_versions,
+        )
+
+    def checkpoint(self) -> None:
+        if not self.db_path.exists():
+            return
+        with self._write_lock, self._connect() as conn:
+            conn.execute("pragma wal_checkpoint(TRUNCATE)")
+
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
@@ -486,3 +520,19 @@ def _row_retryable(row: sqlite3.Row, retry_limit: int, now: str) -> bool:
         return False
     next_retry_at = row["next_retry_at"]
     return not next_retry_at or str(next_retry_at) <= now
+
+
+def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    return (
+        conn.execute(
+            "select 1 from sqlite_master where type = 'table' and name = ?",
+            (table_name,),
+        ).fetchone()
+        is not None
+    )
+
+
+def _table_count(conn: sqlite3.Connection, table_name: str) -> int:
+    if not _table_exists(conn, table_name):
+        return 0
+    return int(conn.execute(f"select count(*) from {table_name}").fetchone()[0])

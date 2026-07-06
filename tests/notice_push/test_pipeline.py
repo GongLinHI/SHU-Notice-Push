@@ -1,4 +1,5 @@
 from datetime import date, datetime
+import json
 import threading
 import time
 
@@ -85,6 +86,7 @@ def run_pipeline(pipeline, **overrides):
         "refresh_seen_max_workers": profile.refresh_seen_max_workers,
         "refresh_seen_limit": profile.refresh_seen_limit,
         "bootstrap_seen": False,
+        "audit_sources": False,
     }
     values.update(overrides)
     values["source_ids"] = tuple(values["source_ids"] or ())
@@ -343,6 +345,137 @@ def test_pipeline_dry_run_fetches_list_and_detail_without_mutating_state(tmp_pat
     assert http.requested == [source.list_url, "https://example.com/detail-1.htm", "https://example.com/page-2.htm"]
 
 
+def test_pipeline_reports_audit_error_when_list_page_parses_no_items(tmp_path):
+    config = load_config(
+        env={},
+        repo_root=tmp_path,
+        state_path=tmp_path / "state.sqlite3",
+        output_dir=tmp_path / "results",
+    )
+    source = config.source_by_id("shu_official")
+    pipeline = NoticePipeline(
+        config=config,
+        storage=NoticeStorage(config.state_path, config.sources),
+        http_client=FakeHttp({source.list_url: "<html>changed</html>"}),
+        summarizer=FakeSummarizer(),
+        adapter_factory=lambda selected_source: FakeAdapter(selected_source),
+    )
+
+    result = run_pipeline(
+        pipeline,
+        source_ids=["shu_official"],
+        dry_run=True,
+        max_pages_per_source=1,
+        audit_sources=True,
+    )
+
+    assert len(result.audit_results) == 1
+    assert result.audit_results[0].list_item_count == 0
+    assert result.audit_results[0].issues[0].severity == "error"
+    assert result.source_errors == ()
+
+
+def test_pipeline_keeps_real_source_errors_separate_from_audit_errors(tmp_path):
+    config = load_config(
+        env={},
+        repo_root=tmp_path,
+        state_path=tmp_path / "state.sqlite3",
+        output_dir=tmp_path / "results",
+    )
+    source = config.source_by_id("shu_official")
+    pipeline = NoticePipeline(
+        config=config,
+        storage=NoticeStorage(config.state_path, config.sources),
+        http_client=FakeHttp({}),
+        summarizer=FakeSummarizer(),
+        adapter_factory=lambda selected_source: FakeAdapter(selected_source),
+    )
+
+    result = run_pipeline(
+        pipeline,
+        source_ids=["shu_official"],
+        dry_run=False,
+        max_pages_per_source=1,
+        audit_sources=False,
+    )
+
+    assert result.audit_results == ()
+    assert len(result.source_errors) == 1
+    assert result.source_errors[0].source_id == source.id
+
+
+def test_pipeline_audit_samples_first_detail_content_kind(tmp_path):
+    config = load_config(
+        env={},
+        repo_root=tmp_path,
+        state_path=tmp_path / "state.sqlite3",
+        output_dir=tmp_path / "results",
+    )
+    source = config.source_by_id("shu_official")
+    pipeline = NoticePipeline(
+        config=config,
+        storage=NoticeStorage(config.state_path, config.sources),
+        http_client=FakeHttp({source.list_url: "list-1", "https://example.com/detail-1.htm": "detail"}),
+        summarizer=FakeSummarizer(),
+        adapter_factory=lambda selected_source: FakeAdapter(selected_source),
+    )
+
+    result = run_pipeline(
+        pipeline,
+        source_ids=["shu_official"],
+        dry_run=True,
+        max_pages_per_source=1,
+        audit_sources=True,
+    )
+
+    assert len(result.audit_results) == 1
+    assert result.audit_results[0].sampled_detail_url == "https://example.com/detail-1.htm"
+    assert result.audit_results[0].detail_content_kind == "text"
+    assert result.source_errors == ()
+
+
+def test_pipeline_audit_samples_multiple_adapter_items(tmp_path):
+    config = load_config(
+        env={},
+        repo_root=tmp_path,
+        state_path=tmp_path / "state.sqlite3",
+        output_dir=tmp_path / "results",
+    )
+    source = config.source_by_id("shu_official")
+    http = FakeHttp(
+        {
+            source.list_url: "list-1",
+            "https://example.com/detail-1.htm": "detail",
+            "https://example.com/detail-2.htm": "detail",
+            "https://example.com/detail-3.htm": "detail",
+            "https://example.com/detail-4.htm": "detail",
+        }
+    )
+    pipeline = NoticePipeline(
+        config=config,
+        storage=NoticeStorage(config.state_path, config.sources),
+        http_client=http,
+        summarizer=FakeSummarizer(),
+        adapter_factory=lambda selected_source: MultiItemAdapter(selected_source),
+    )
+
+    result = run_pipeline(
+        pipeline,
+        source_ids=["shu_official"],
+        dry_run=True,
+        limit=0,
+        max_pages_per_source=1,
+        audit_sources=True,
+    )
+
+    assert [sample.url for sample in result.audit_results[0].samples] == [
+        "https://example.com/detail-1.htm",
+        "https://example.com/detail-2.htm",
+        "https://example.com/detail-3.htm",
+    ]
+    assert "https://example.com/detail-4.htm" not in http.requested
+
+
 def test_pipeline_run_persists_summary_and_writes_report(tmp_path):
     config = load_config(
         env={},
@@ -373,7 +506,22 @@ def test_pipeline_run_persists_summary_and_writes_report(tmp_path):
     assert result.new_count == 1
     assert result.summarized_count == 1
     assert result.report_path == tmp_path / "results" / "2026-06-30.md"
+    assert result.run_summary_path == tmp_path / "results" / "json" / "2026-06-30.json"
     assert "## 上海大学官网|行政|周常事务|测试通知 1" in result.report_path.read_text(encoding="utf-8")
+    run_summary = json.loads(result.run_summary_path.read_text(encoding="utf-8"))
+    assert run_summary["report_date"] == "2026-06-30"
+    assert run_summary["new_count"] == 1
+    assert run_summary["summarized_count"] == 1
+    assert run_summary["source_error_count"] == 0
+    assert run_summary["audit_error_count"] == 0
+    assert run_summary["refresh_seen_error_count"] == 0
+    assert run_summary["duration_seconds"] >= 0
+    assert run_summary["models"] == ["fake-model"]
+    assert run_summary["media_counts"] == {}
+    assert run_summary["failure_types"] == {}
+    assert run_summary["sources"][0]["source_id"] == "shu_official"
+    assert run_summary["sources"][0]["summarized_count"] == 1
+    assert run_summary["report_path"].endswith("2026-06-30.md")
     assert storage.find_by_source_url("shu_official", "https://example.com/detail-1.htm")["status"] == "summarized"
 
 
@@ -998,6 +1146,52 @@ def test_pipeline_updates_seen_notice_detail_hash_without_resummarizing(tmp_path
     assert summarizer.details == []
     assert row["status"] == "updated_seen"
     assert "新详情页正文" in row["content"]
+
+
+def test_pipeline_reports_refresh_seen_detail_errors(tmp_path):
+    config = load_config(
+        env={},
+        repo_root=tmp_path,
+        state_path=tmp_path / "state.sqlite3",
+        output_dir=tmp_path / "results",
+    )
+    source = config.source_by_id("shu_official")
+    storage = NoticeStorage(config.state_path, config.sources)
+    storage.initialize()
+    item = NoticeListItem(
+        source_id=source.id,
+        url="https://example.com/detail-1.htm",
+        canonical_url="https://example.com/detail-1.htm",
+        title="测试通知 1",
+        published_at=datetime(2026, 6, 16),
+        list_excerpt="列表摘要",
+    )
+    storage.upsert_seen_item(item)
+
+    class RefreshFailingAdapter(FakeAdapter):
+        def parse_detail(self, html, item):
+            raise RuntimeError("refresh detail failed")
+
+    pipeline = NoticePipeline(
+        config=config,
+        storage=storage,
+        http_client=FakeHttp({source.list_url: "list-1", "https://example.com/detail-1.htm": "detail"}),
+        summarizer=FakeSummarizer(),
+        adapter_factory=lambda selected_source: RefreshFailingAdapter(selected_source),
+    )
+
+    result = run_pipeline(
+        pipeline,
+        source_ids=["shu_official"],
+        dry_run=False,
+        max_pages_per_source=1,
+        refresh_seen_details=True,
+        report_date=date(2026, 7, 6),
+    )
+
+    assert result.refresh_seen_errors[0].url == item.url
+    assert "refresh detail failed" in result.refresh_seen_errors[0].reason
+    assert result.source_stats[0].refresh_seen_error_count == 1
 
 
 def test_pipeline_skips_seen_detail_refresh_when_disabled(tmp_path):

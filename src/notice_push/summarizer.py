@@ -10,8 +10,9 @@ from openai import OpenAI
 from src.notice_push.http import HttpClient
 from src.notice_push.llm_chat import create_chat_completion_with_retry
 from src.notice_push.media import download_asset_to_temp, image_path_to_data_url
-from src.notice_push.models import NoticeAsset, NoticeDetail, NoticeSummary
+from src.notice_push.models import MediaPolicy, NoticeAsset, NoticeDetail, NoticeSummary
 from src.notice_push.resources import visible_notice_resources
+from src.notice_push.summary_validator import normalize_summary_markdown, validate_summary_markdown
 
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
@@ -59,6 +60,7 @@ class NoticeSummarizer:
         max_retries: int = 2,
         initial_retry_delay: float = 0.5,
         retry_backoff: float = 2.0,
+        summary_format_repair_retries: int = 1,
     ):
         self.prompt_dir = Path(prompt_dir)
         self.prompt_name = prompt_name
@@ -70,6 +72,7 @@ class NoticeSummarizer:
         self.max_retries = max(1, max_retries)
         self.initial_retry_delay = max(0.0, initial_retry_delay)
         self.retry_backoff = max(1.0, retry_backoff)
+        self.summary_format_repair_retries = max(0, summary_format_repair_retries)
         self._system_prompt: Optional[str] = None
 
     def summarize(self, notice_id: int, detail: NoticeDetail, source_name: Optional[str] = None) -> NoticeSummary:
@@ -79,6 +82,7 @@ class NoticeSummarizer:
         system_prompt = self._get_system_prompt()
         user_prompt = self.render_user_prompt(detail, source_name=source_name)
         content = self._chat(system_prompt, user_prompt)
+        content = self._normalize_validate_or_repair(content, system_prompt, user_prompt)
 
         return NoticeSummary(
             notice_id=notice_id,
@@ -104,6 +108,24 @@ class NoticeSummarizer:
             initial_retry_delay=self.initial_retry_delay,
             retry_backoff=self.retry_backoff,
         )
+
+    def _normalize_validate_or_repair(self, content: str, system_prompt: str, user_prompt: str) -> str:
+        normalized = normalize_summary_markdown(content)
+        try:
+            validate_summary_markdown(normalized)
+            return normalized
+        except ValueError as original_error:
+            last_error = original_error
+
+        for _ in range(self.summary_format_repair_retries):
+            repair_prompt = _render_summary_repair_prompt(user_prompt, normalized)
+            normalized = normalize_summary_markdown(self._chat(system_prompt, repair_prompt))
+            try:
+                validate_summary_markdown(normalized)
+                return normalized
+            except ValueError as exc:
+                last_error = exc
+        raise last_error
 
     def _get_system_prompt(self) -> str:
         if self._system_prompt is None:
@@ -136,6 +158,8 @@ class KimiMultimodalSummarizer:
         max_retries: int = 2,
         initial_retry_delay: float = 0.5,
         retry_backoff: float = 2.0,
+        media_policy: MediaPolicy = MediaPolicy(),
+        summary_format_repair_retries: int = 1,
     ):
         self.prompt_dir = Path(prompt_dir)
         self.prompt_name = prompt_name
@@ -144,8 +168,13 @@ class KimiMultimodalSummarizer:
         self.base_url = base_url
         self._client = client
         self.http_client = http_client or HttpClient()
+        self.media_policy = media_policy
         if downloader is None:
-            self._downloader = lambda asset: download_asset_to_temp(self.http_client, asset)
+            self._downloader = lambda asset: download_asset_to_temp(
+                self.http_client,
+                asset,
+                max_bytes=self._max_bytes_for_asset(asset),
+            )
             self._owns_downloads = True
         else:
             self._downloader = downloader
@@ -154,6 +183,7 @@ class KimiMultimodalSummarizer:
         self.max_retries = max(1, max_retries)
         self.initial_retry_delay = max(0.0, initial_retry_delay)
         self.retry_backoff = max(1.0, retry_backoff)
+        self.summary_format_repair_retries = max(0, summary_format_repair_retries)
         self._system_prompt: Optional[str] = None
 
     def summarize(self, notice_id: int, detail: NoticeDetail, source_name: Optional[str] = None) -> NoticeSummary:
@@ -163,6 +193,7 @@ class KimiMultimodalSummarizer:
             markdown = self._summarize_image(detail, source_name=source_name)
         else:
             raise ValueError(f"unsupported Kimi content kind: {detail.content_kind}")
+        markdown = self._normalize_validate_or_repair(markdown, detail, source_name)
 
         return NoticeSummary(
             notice_id=notice_id,
@@ -184,6 +215,8 @@ class KimiMultimodalSummarizer:
             file_content = self._get_client().files.content(file_id=file_id).text
             if not file_content or not file_content.strip():
                 raise ValueError("empty PDF extraction response from Kimi")
+            if len(file_content) > self.media_policy.pdf_extracted_text_max_chars:
+                file_content = file_content[: self.media_policy.pdf_extracted_text_max_chars]
             messages = [
                 {"role": "system", "content": self._get_system_prompt()},
                 {"role": "system", "content": file_content},
@@ -245,11 +278,50 @@ class KimiMultimodalSummarizer:
             retry_backoff=self.retry_backoff,
         )
 
+    def _normalize_validate_or_repair(
+        self,
+        markdown: str,
+        detail: NoticeDetail,
+        source_name: Optional[str],
+    ) -> str:
+        normalized = normalize_summary_markdown(markdown)
+        try:
+            validate_summary_markdown(normalized)
+            return normalized
+        except ValueError as original_error:
+            last_error = original_error
+
+        for _ in range(self.summary_format_repair_retries):
+            repair_messages = [
+                {"role": "system", "content": self._get_system_prompt()},
+                {
+                    "role": "user",
+                    "content": _render_summary_repair_prompt(
+                        render_notice_user_prompt(detail, source_name=source_name),
+                        normalized,
+                    ),
+                },
+            ]
+            normalized = normalize_summary_markdown(self._chat(repair_messages))
+            try:
+                validate_summary_markdown(normalized)
+                return normalized
+            except ValueError as exc:
+                last_error = exc
+        raise last_error
+
     def _select_asset(self, detail: NoticeDetail, kind: str) -> NoticeAsset:
         for asset in detail.assets:
             if asset.kind == kind and asset.role in MEDIA_ASSET_ROLES:
                 return asset
         raise ValueError(f"no {kind} asset found for notice detail")
+
+    def _max_bytes_for_asset(self, asset: NoticeAsset) -> int:
+        if asset.kind == "pdf":
+            return self.media_policy.pdf_max_bytes
+        if asset.kind == "image":
+            return self.media_policy.image_max_bytes
+        raise ValueError(f"unsupported media asset kind: {asset.kind}")
 
     def _cleanup_download(self, path: Path) -> None:
         if not self._owns_downloads:
@@ -292,3 +364,13 @@ class SummarizerRouter:
         if summarizer is None:
             raise ValueError(f"no summarizer configured for provider: {provider_name}")
         return summarizer.summarize(notice_id, detail, source_name=source_name)
+
+
+def _render_summary_repair_prompt(original_user_prompt: str, markdown: str) -> str:
+    return (
+        "请只修复下面摘要的 Markdown 格式，使其严格包含这些字段："
+        "发布时间、影响对象、核心信息、行动指引、截止时间、相关链接。\n"
+        "不要新增事实，不要改变原摘要含义；缺失字段如无信息请写“未提及”。\n\n"
+        f"原通知上下文：\n{original_user_prompt}\n\n"
+        f"待修复摘要：\n{markdown}\n"
+    )

@@ -175,6 +175,14 @@ KIMI_MODEL=kimi-k2.7-code
 
 ### 3. 试运行
 
+先做本地配置和状态库体检：
+
+```powershell
+conda run --no-capture-output -n spider python -m src.notice_push --doctor
+```
+
+`--doctor` 不会访问源站，也不会初始化 LLM 客户端；缺少 API key 只输出 warning。
+
 不写入 SQLite 和报告，只验证抓取解析流程：
 
 ```powershell
@@ -220,6 +228,8 @@ conda run --no-capture-output -n spider python -m src.notice_push --profile dail
 - GitHub Actions 渲染的 HTML：`resources/results/html/YYYY-MM-DD.html`
 
 ## 添加新通知源
+
+详细步骤见 [docs/add-source-guide.md](docs/add-source-guide.md)。
 
 通常需要：
 

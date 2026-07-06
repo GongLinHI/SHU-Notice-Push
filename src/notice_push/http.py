@@ -3,12 +3,19 @@ from __future__ import annotations
 import re
 import threading
 import time
+from dataclasses import dataclass
 
 import requests
 
 
 _META_CHARSET_PATTERN = re.compile(br"<meta[^>]+charset=['\"]?([A-Za-z0-9_-]+)", re.IGNORECASE)
 _WEAK_ENCODINGS = {"iso-8859-1", "latin-1"}
+
+
+@dataclass(frozen=True)
+class DownloadedBytes:
+    content: bytes
+    content_type: str = ""
 
 
 class HttpClient:
@@ -39,15 +46,42 @@ class HttpClient:
     def get_bytes(self, url: str) -> bytes:
         return self._get_response(url).content
 
-    def _get_response(self, url: str):
+    def get_bytes_limited(self, url: str, max_bytes: int) -> bytes:
+        return self.get_download_limited(url, max_bytes).content
+
+    def get_download_limited(self, url: str, max_bytes: int) -> DownloadedBytes:
+        response = self._get_response(url, stream=True)
+        chunks: list[bytes] = []
+        total = 0
+        try:
+            for chunk in response.iter_content(chunk_size=8192):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > max_bytes:
+                    raise ValueError("download exceeds max_bytes")
+                chunks.append(chunk)
+        finally:
+            close = getattr(response, "close", None)
+            if callable(close):
+                close()
+        content_type = ""
+        headers = getattr(response, "headers", None)
+        if headers:
+            content_type = str(headers.get("content-type", "")).split(";", 1)[0].strip().lower()
+        return DownloadedBytes(content=b"".join(chunks), content_type=content_type)
+
+    def _get_response(self, url: str, *, stream: bool = False):
         last_error: Exception | None = None
         for attempt in range(self._max_retries):
             try:
-                response = self._get_session().get(
-                    url,
-                    timeout=self._timeout,
-                    headers={"User-Agent": self._user_agent},
-                )
+                kwargs = {
+                    "timeout": self._timeout,
+                    "headers": {"User-Agent": self._user_agent},
+                }
+                if stream:
+                    kwargs["stream"] = True
+                response = self._get_session().get(url, **kwargs)
                 response.raise_for_status()
                 break
             except Exception as exc:

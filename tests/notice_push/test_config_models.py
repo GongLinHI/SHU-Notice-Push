@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from src.notice_push.config import load_config
-from src.notice_push.models import NoticeListItem, NoticeRuntimeProfile, NoticeSource, ParsingConfig
+from src.notice_push.models import AuditPolicy, MediaPolicy, NoticeListItem, NoticeRuntimeProfile, NoticeSource, ParsingConfig
 
 
 def test_load_config_uses_defaults_and_repo_relative_paths(tmp_path):
@@ -24,9 +24,20 @@ def test_load_config_uses_defaults_and_repo_relative_paths(tmp_path):
     assert config.llm_providers["kimi"].model_env == "KIMI_MODEL"
     assert config.llm_providers["kimi"].default_model == "kimi-k2.7-code"
     assert config.llm_routing == {"text": "deepseek", "pdf": "kimi", "image": "kimi"}
+    assert config.summary_format_repair_retries == 1
     assert config.parsing == ParsingConfig(
         external_video_domains=("kankanews.com",),
         noise_image_markers=("logo", "icon", "wx", "weixin", "qr", "blank", "spacer"),
+    )
+    assert config.media_policy == MediaPolicy(
+        pdf_max_bytes=20971520,
+        image_max_bytes=8388608,
+        pdf_extracted_text_max_chars=50000,
+    )
+    assert config.audit_policy == AuditPolicy(
+        min_list_items=1,
+        sample_detail_count=3,
+        required_content_kinds=("text", "pdf", "image"),
     )
     assert config.detail_min_chars == 30
     assert config.runtime_profiles["daily"] == NoticeRuntimeProfile(
@@ -228,6 +239,7 @@ def test_load_config_reads_llm_provider_values_from_yaml(tmp_path):
                 "    text: deepseek",
                 "    pdf: kimi",
                 "    image: kimi",
+                "  summary_format_repair_retries: 2",
             ]
         ),
         encoding="utf-8",
@@ -250,6 +262,7 @@ def test_load_config_reads_llm_provider_values_from_yaml(tmp_path):
     assert config.llm_routing["text"] == "deepseek"
     assert config.llm_routing["pdf"] == "kimi"
     assert config.llm_routing["image"] == "kimi"
+    assert config.summary_format_repair_retries == 2
 
 
 def test_load_config_reads_parsing_values_from_yaml(tmp_path):
@@ -274,6 +287,56 @@ def test_load_config_reads_parsing_values_from_yaml(tmp_path):
     assert config.parsing == ParsingConfig(
         external_video_domains=("video.example.edu",),
         noise_image_markers=("tracking", "spacer"),
+    )
+
+
+def test_load_config_reads_media_policy_from_yaml(tmp_path):
+    config_dir = tmp_path / "resources" / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "runtime.yml").write_text(
+        "\n".join(
+            [
+                "media:",
+                "  pdf_max_bytes: 1024",
+                "  image_max_bytes: 512",
+                "  pdf_extracted_text_max_chars: 2048",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(env={}, repo_root=tmp_path)
+
+    assert config.media_policy == MediaPolicy(
+        pdf_max_bytes=1024,
+        image_max_bytes=512,
+        pdf_extracted_text_max_chars=2048,
+    )
+
+
+def test_load_config_reads_audit_policy_from_yaml(tmp_path):
+    config_dir = tmp_path / "resources" / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "runtime.yml").write_text(
+        "\n".join(
+            [
+                "audit:",
+                "  min_list_items: 2",
+                "  sample_detail_count: 4",
+                "  required_content_kinds:",
+                "    - text",
+                "    - pdf",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(env={}, repo_root=tmp_path)
+
+    assert config.audit_policy == AuditPolicy(
+        min_list_items=2,
+        sample_detail_count=4,
+        required_content_kinds=("text", "pdf"),
     )
 
 

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from dataclasses import dataclass, replace
+from datetime import date, datetime, time, timedelta, timezone
 from importlib import import_module
+from time import perf_counter
 from typing import Callable, Iterable, Optional
 
 from src.notice_push.config import AppConfig
@@ -15,10 +16,14 @@ from src.notice_push.models import (
     NoticeSource,
     PipelineResult,
     PipelineRunOptions,
+    PipelineSourceStats,
+    RefreshSeenError,
     ReportStats,
     SourceError,
 )
 from src.notice_push.report import ReportEntry, render_report, write_report
+from src.notice_push.run_summary import write_run_summary
+from src.notice_push.source_audit import SourceAuditor
 from src.notice_push.storage import NoticeStorage
 
 
@@ -70,6 +75,8 @@ class NoticePipeline:
         self,
         options: PipelineRunOptions,
     ) -> PipelineResult:
+        started_at = _utc_now()
+        started_perf = perf_counter()
         selected_sources = self._select_sources(options.source_ids or None)
         max_pages = options.max_pages_per_source
         stop_after_seen = options.stop_after_seen_pages
@@ -94,8 +101,19 @@ class NoticePipeline:
         entries: list[ReportEntry] = []
         failures: list[FailedNotice] = []
         source_errors: list[SourceError] = []
+        refresh_seen_errors: list[RefreshSeenError] = []
+        audit_results = ()
         new_count = 0
         retried_count = 0
+
+        if options.audit_sources:
+            audit_results = SourceAuditor(
+                self.http_client,
+                self.adapter_factory,
+                min_list_items=self.config.audit_policy.min_list_items,
+                sample_detail_count=self.config.audit_policy.sample_detail_count,
+                required_content_kinds=self.config.audit_policy.required_content_kinds,
+            ).audit_sources(selected_sources)
 
         if not options.dry_run:
             self.storage.initialize()
@@ -195,11 +213,14 @@ class NoticePipeline:
                     if active_refresh_seen_details:
                         if active_refresh_seen_limit > 0:
                             seen_items = seen_items[:active_refresh_seen_limit]
-                        self._update_seen_details_if_changed(
-                            adapter,
-                            seen_items,
-                            seen_rows,
-                            max_workers=active_refresh_seen_workers,
+                        refresh_seen_errors.extend(
+                            self._update_seen_details_if_changed(
+                                source,
+                                adapter,
+                                seen_items,
+                                seen_rows,
+                                max_workers=active_refresh_seen_workers,
+                            )
                         )
 
                 if not options.dry_run and options.limit is not None and processed_for_source >= options.limit:
@@ -223,7 +244,8 @@ class NoticePipeline:
             markdown = render_report(report_day, entries, failures, stats)
             report_path = write_report(self.config.output_dir, report_day, markdown)
 
-        return PipelineResult(
+        finished_at = _utc_now()
+        result = PipelineResult(
             report_path=report_path,
             new_count=new_count,
             summarized_count=len(entries),
@@ -231,7 +253,28 @@ class NoticePipeline:
             manual_review_count=len(failures),
             failed=tuple(failures),
             source_errors=tuple(source_errors),
+            audit_results=audit_results,
+            refresh_seen_errors=tuple(refresh_seen_errors),
+            source_stats=_source_stats(
+                selected_sources,
+                entries,
+                failures,
+                source_errors,
+                audit_results,
+                refresh_seen_errors,
+            ),
+            models_used=_models_used(entries),
+            media_counts=_media_counts(entries),
+            started_at=started_at,
+            finished_at=finished_at,
+            duration_seconds=round(perf_counter() - started_perf, 3),
+            git_sha=options.git_sha,
         )
+        if not options.dry_run:
+            run_summary_path = write_run_summary(self.config.output_dir, report_day, result)
+            result = replace(result, run_summary_path=run_summary_path)
+            self.storage.checkpoint()
+        return result
 
     def _fetch_and_store_detail(
         self,
@@ -260,6 +303,7 @@ class NoticePipeline:
             self.storage.save_detail(notice_id, detail)
             return DetailFetchResult(prepared=PreparedNotice(source=source, notice_id=notice_id, detail=detail))
         except Exception as exc:
+            failure_type = _classify_failure(exc, stage="detail")
             failure = FailedNotice(
                 source_id=source.id,
                 source_name=source.name,
@@ -267,12 +311,13 @@ class NoticePipeline:
                 url=item.url,
                 reason=str(exc),
                 published_at=item.published_at,
+                failure_type=failure_type,
             )
             if not dry_run and notice_id is not None:
                 self.storage.mark_failed(
                     notice_id,
                     str(exc),
-                    failure_type=_classify_failure(exc, stage="detail"),
+                    failure_type=failure_type,
                     retry_after_hours=retry_policy.after_hours,
                     retry_limit=retry_policy.limit,
                 )
@@ -321,29 +366,38 @@ class NoticePipeline:
 
     def _update_seen_details_if_changed(
         self,
+        source: NoticeSource,
         adapter,
         items: list[NoticeListItem],
         seen_rows: dict[str, object],
         max_workers: Optional[int] = None,
-    ) -> None:
+    ) -> list[RefreshSeenError]:
         if not items:
-            return
+            return []
 
         worker_count = min(max(1, max_workers or 1), len(items))
 
-        def update_one(item: NoticeListItem) -> None:
+        def update_one(item: NoticeListItem) -> RefreshSeenError | None:
             try:
                 detail_html = self.http_client.get_text(item.url)
                 detail = adapter.parse_detail(detail_html, item)
                 if not is_summarizable_detail(detail, self.config.detail_min_chars):
-                    return
+                    return None
                 notice_id = int(seen_rows[item.canonical_url]["id"])
                 self.storage.update_seen_detail_if_changed(notice_id, detail)
-            except Exception:
-                return
+                return None
+            except Exception as exc:
+                return RefreshSeenError(
+                    source_id=source.id,
+                    source_name=source.name,
+                    title=item.title,
+                    url=item.url,
+                    reason=str(exc),
+                )
 
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            list(executor.map(update_one, items))
+            results = list(executor.map(update_one, items))
+        return [error for error in results if error is not None]
 
     def _summarize_notices(
         self,
@@ -377,6 +431,7 @@ class NoticePipeline:
         for index, prepared in enumerate(prepared_notices):
             outcome = outcomes[index]
             if isinstance(outcome, Exception):
+                failure_type = _classify_failure(outcome, stage="summary")
                 failure = FailedNotice(
                     source_id=prepared.source.id,
                     source_name=prepared.source.name,
@@ -384,12 +439,13 @@ class NoticePipeline:
                     url=prepared.detail.url,
                     reason=str(outcome),
                     published_at=prepared.detail.published_at,
+                    failure_type=failure_type,
                 )
                 failures.append(failure)
                 self.storage.mark_failed(
                     prepared.notice_id,
                     str(outcome),
-                    failure_type=_classify_failure(outcome, stage="summary"),
+                    failure_type=failure_type,
                     retry_after_hours=retry_policy.after_hours,
                     retry_limit=retry_policy.limit,
                 )
@@ -418,6 +474,76 @@ class NoticePipeline:
         return [source for source in self.config.sources if source.enabled]
 
 
+def _source_stats(
+    sources: list[NoticeSource],
+    entries: list[ReportEntry],
+    failures: list[FailedNotice],
+    source_errors: list[SourceError],
+    audit_results,
+    refresh_seen_errors: list[RefreshSeenError],
+) -> tuple[PipelineSourceStats, ...]:
+    stats = {
+        source.id: {
+            "source": source,
+            "summarized_count": 0,
+            "failed_count": 0,
+            "source_error_count": 0,
+            "audit_error_count": 0,
+            "audit_warning_count": 0,
+            "refresh_seen_error_count": 0,
+        }
+        for source in sources
+    }
+    for entry in entries:
+        if entry.source_id in stats:
+            stats[entry.source_id]["summarized_count"] += 1
+    for failure in failures:
+        if failure.source_id in stats:
+            stats[failure.source_id]["failed_count"] += 1
+    for error in source_errors:
+        if error.source_id in stats:
+            stats[error.source_id]["source_error_count"] += 1
+    for audit in audit_results:
+        if audit.source_id not in stats:
+            continue
+        stats[audit.source_id]["audit_error_count"] += sum(
+            1 for issue in audit.issues if issue.severity == "error"
+        )
+        stats[audit.source_id]["audit_warning_count"] += sum(
+            1 for issue in audit.issues if issue.severity == "warning"
+        )
+    for error in refresh_seen_errors:
+        if error.source_id in stats:
+            stats[error.source_id]["refresh_seen_error_count"] += 1
+
+    return tuple(
+        PipelineSourceStats(
+            source_id=source_id,
+            source_name=values["source"].name,
+            summarized_count=int(values["summarized_count"]),
+            failed_count=int(values["failed_count"]),
+            source_error_count=int(values["source_error_count"]),
+            audit_error_count=int(values["audit_error_count"]),
+            audit_warning_count=int(values["audit_warning_count"]),
+            refresh_seen_error_count=int(values["refresh_seen_error_count"]),
+        )
+        for source_id, values in stats.items()
+    )
+
+
+def _models_used(entries: list[ReportEntry]) -> tuple[str, ...]:
+    return tuple(sorted({entry.summary.model for entry in entries if entry.summary.model}))
+
+
+def _media_counts(entries: list[ReportEntry]) -> dict[str, int]:
+    counts = {"pdf": 0, "image": 0, "video": 0}
+    for entry in entries:
+        content_kind = entry.detail.content_kind
+        if content_kind in counts:
+            counts[content_kind] += 1
+    return {key: value for key, value in counts.items() if value}
+
+
 def create_adapter(source: NoticeSource, detail_parser=None):
     adapter_path = source.adapter
     module_name, _, class_name = adapter_path.rpartition(".")
@@ -435,6 +561,10 @@ def _cutoff_datetime(report_day: date, lookback_days: Optional[int]) -> Optional
     if lookback_days is None or lookback_days <= 0:
         return None
     return datetime.combine(report_day, time.min) - timedelta(days=lookback_days)
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
 def _items_within_lookback(items: list[NoticeListItem], cutoff: Optional[datetime]) -> list[NoticeListItem]:
