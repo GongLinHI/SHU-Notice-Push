@@ -15,9 +15,12 @@ jobs:
           python-version: '3.12'
           cache: pip
       - name: Check workflows
-        uses: rhysd/actionlint@v1
+        shell: bash
+        run: |
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color
       - run: pip install -r requirements.txt
-      - run: python -m notice_push --doctor
+      - run: python -m notice_push --doctor --state-path "$RUNNER_TEMP/ci-state.sqlite3"
       - run: pytest tests/notice_push/test_cli.py tests/notice_push/test_sources.py -q
       - run: pytest -q
       - run: python -m compileall -q notice_push
