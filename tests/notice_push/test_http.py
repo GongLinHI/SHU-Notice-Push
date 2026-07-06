@@ -1,7 +1,7 @@
 import pytest
 import threading
 
-from src.notice_push.http import HttpClient
+from notice_push.http import HttpClient
 
 
 class _FakeResponse:
@@ -95,7 +95,7 @@ def test_http_client_uses_exponential_backoff_between_retries(monkeypatch):
     session = _AlwaysFailSession()
     sleep_calls = []
 
-    monkeypatch.setattr("src.notice_push.http.time.sleep", sleep_calls.append)
+    monkeypatch.setattr("notice_push.http.time.sleep", sleep_calls.append)
     client = HttpClient(
         session=session,
         max_retries=3,

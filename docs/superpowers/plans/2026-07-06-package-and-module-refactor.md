@@ -311,9 +311,9 @@ run_source_audit
 `notice_push/app_factory.py` should import:
 
 ```python
-from notice_push.config import load_config
-from notice_push.detail_parser import DetailParser
-from notice_push.html_utils import ParsingRules
+from notice_push.settings.loader import load_config
+from notice_push.parsing.detail import DetailParser
+from notice_push.parsing.html import ParsingRules
 from notice_push.http import HttpClient
 from notice_push.llm import resolve_optional_provider
 from notice_push.pipeline import NoticePipeline, create_adapter

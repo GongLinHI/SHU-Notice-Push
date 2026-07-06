@@ -3,10 +3,10 @@ import json
 import threading
 import time
 
-from src.notice_push.config import load_config
-from src.notice_push.models import NoticeAsset, NoticeDetail, NoticeListItem, NoticeSummary, PipelineRunOptions
-from src.notice_push.pipeline import NoticePipeline, create_adapter, is_summarizable_detail
-from src.notice_push.storage import NoticeStorage
+from notice_push.settings.loader import load_config
+from notice_push.domain import NoticeAsset, NoticeDetail, NoticeListItem, NoticeSummary, PipelineRunOptions
+from notice_push.pipeline import NoticePipeline, create_adapter, is_summarizable_detail
+from notice_push.storage import NoticeStorage
 
 
 class FakeHttp:
@@ -1256,11 +1256,11 @@ def test_create_adapter_loads_adapter_from_import_path(tmp_path):
         name=source.name,
         base_url=source.base_url,
         list_url=source.list_url,
-        adapter="src.notice_push.sources.shu_official.ShuOfficialAdapter",
+        adapter="notice_push.sources.shu_official.ShuOfficialAdapter",
         enabled=source.enabled,
     )
 
-    from src.notice_push.sources.shu_official import ShuOfficialAdapter
+    from notice_push.sources.shu_official import ShuOfficialAdapter
 
     adapter = create_adapter(import_path_source)
 

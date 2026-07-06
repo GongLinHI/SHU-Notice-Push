@@ -1,9 +1,9 @@
 import sqlite3
 from datetime import datetime
 
-from src.notice_push.config import load_config
-from src.notice_push.models import Attachment, NoticeAsset, NoticeDetail, NoticeListItem, NoticeSummary
-from src.notice_push.storage import NoticeStorage
+from notice_push.settings.loader import load_config
+from notice_push.domain import Attachment, NoticeAsset, NoticeDetail, NoticeListItem, NoticeSummary
+from notice_push.storage import NoticeStorage
 
 
 def make_item(source_id: str, url: str, title: str = "测试通知") -> NoticeListItem:

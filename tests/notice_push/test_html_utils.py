@@ -2,7 +2,7 @@ from datetime import datetime
 
 from bs4 import BeautifulSoup
 
-from src.notice_push.html_utils import (
+from notice_push.parsing.html import (
     ParsingRules,
     absolute_url,
     clean_text,
@@ -13,7 +13,7 @@ from src.notice_push.html_utils import (
     parse_date,
     remove_noise_nodes,
 )
-from src.notice_push.models import NoticeAsset
+from notice_push.domain import NoticeAsset
 
 
 def test_absolute_url_resolves_relative_paths():

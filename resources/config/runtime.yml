@@ -49,19 +49,19 @@ sources:
     name: 上海大学官网
     base_url: https://www.shu.edu.cn/
     list_url: https://www.shu.edu.cn/tzgg.htm
-    adapter: src.notice_push.sources.shu_official.ShuOfficialAdapter
+    adapter: notice_push.sources.shu_official.ShuOfficialAdapter
     enabled: true
   management_school:
     name: 上海大学管理学院
     base_url: https://ms.shu.edu.cn/
     list_url: https://ms.shu.edu.cn/syzl/zytz.htm
-    adapter: src.notice_push.sources.management_school.ManagementSchoolAdapter
+    adapter: notice_push.sources.management_school.ManagementSchoolAdapter
     enabled: true
   graduate_school:
     name: 上海大学研究生院
     base_url: https://gs.shu.edu.cn/
     list_url: https://gs.shu.edu.cn/xwlb/sy.htm
-    adapter: src.notice_push.sources.graduate_school.GraduateSchoolAdapter
+    adapter: notice_push.sources.graduate_school.GraduateSchoolAdapter
     enabled: true
 
 profiles:

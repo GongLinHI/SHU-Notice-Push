@@ -1,7 +1,7 @@
 from datetime import date, datetime
 
-from src.notice_push.models import Attachment, FailedNotice, NoticeAsset, NoticeDetail, NoticeSummary, ReportStats
-from src.notice_push.report import ReportEntry, render_report, write_report
+from notice_push.domain import Attachment, FailedNotice, NoticeAsset, NoticeDetail, NoticeSummary, ReportStats
+from notice_push.reporting.markdown import ReportEntry, render_report, write_report
 
 
 def make_entry() -> ReportEntry:

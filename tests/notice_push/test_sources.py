@@ -1,11 +1,11 @@
 from pathlib import Path
 
-from src.notice_push.detail_parser import ParsedDetailBody
-from src.notice_push.models import NoticeListItem
-from src.notice_push.config import load_config
-from src.notice_push.sources.graduate_school import GraduateSchoolAdapter
-from src.notice_push.sources.management_school import ManagementSchoolAdapter
-from src.notice_push.sources.shu_official import ShuOfficialAdapter
+from notice_push.parsing.detail import ParsedDetailBody
+from notice_push.domain import NoticeListItem
+from notice_push.settings.loader import load_config
+from notice_push.sources.graduate_school import GraduateSchoolAdapter
+from notice_push.sources.management_school import ManagementSchoolAdapter
+from notice_push.sources.shu_official import ShuOfficialAdapter
 
 
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "source_pages"

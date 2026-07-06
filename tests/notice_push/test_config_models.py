@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from src.notice_push.config import load_config
-from src.notice_push.models import AuditPolicy, MediaPolicy, NoticeListItem, NoticeRuntimeProfile, NoticeSource, ParsingConfig
+from notice_push.settings.loader import load_config
+from notice_push.domain import AuditPolicy, MediaPolicy, NoticeListItem, NoticeRuntimeProfile, NoticeSource, ParsingConfig
 
 
 def test_load_config_uses_defaults_and_repo_relative_paths(tmp_path):

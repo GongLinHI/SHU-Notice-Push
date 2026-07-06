@@ -2,9 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from src.notice_push import media as media_module
-from src.notice_push.media import download_asset_to_temp
-from src.notice_push.models import NoticeAsset
+from notice_push.parsing import media as media_module
+from notice_push.parsing.media import download_asset_to_temp
+from notice_push.domain import NoticeAsset
 
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\nfake"
@@ -27,7 +27,7 @@ class _DownloadHttpClient:
         self.requests = []
 
     def get_download_limited(self, url: str, max_bytes: int):
-        from src.notice_push.http import DownloadedBytes
+        from notice_push.http import DownloadedBytes
 
         self.requests.append((url, max_bytes))
         return DownloadedBytes(content=self.content, content_type=self.content_type)

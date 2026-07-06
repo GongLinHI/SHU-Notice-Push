@@ -48,7 +48,7 @@ jobs:
         id: run_python_script
         run: |
           set +e
-          output=$(python -m src.notice_push --profile daily --date "${{ steps.date.outputs.date }}" 2>&1)
+          output=$(python -m notice_push --profile daily --date "${{ steps.date.outputs.date }}" 2>&1)
           exit_code=$?
           echo "$output"
           printf '%s\n' "$output" > "$RUNNER_TEMP/notice_pipeline.log"

@@ -73,7 +73,7 @@ environment: Ubuntu-Python
 
 每次运行后，workflow 会：
 
-1. 执行 `python -m src.notice_push --profile daily`。
+1. 执行 `python -m notice_push --profile daily`。
 2. 如果发现新通知或需要人工复核的失败通知，生成 `resources/results/YYYY-MM-DD.md`。
 3. 使用 `pandoc` 和 [resources/templates/daily_report.html](resources/templates/daily_report.html) 渲染 HTML 邮件。
 4. 发送每日通知邮件。
@@ -178,7 +178,7 @@ KIMI_MODEL=kimi-k2.7-code
 先做本地配置和状态库体检：
 
 ```powershell
-conda run --no-capture-output -n spider python -m src.notice_push --doctor
+conda run --no-capture-output -n spider python -m notice_push --doctor
 ```
 
 `--doctor` 不会访问源站，也不会初始化 LLM 客户端；缺少 API key 只输出 warning。
@@ -186,37 +186,37 @@ conda run --no-capture-output -n spider python -m src.notice_push --doctor
 不写入 SQLite 和报告，只验证抓取解析流程：
 
 ```powershell
-conda run --no-capture-output -n spider python -m src.notice_push --dry-run --profile daily
+conda run --no-capture-output -n spider python -m notice_push --dry-run --profile daily
 ```
 
 运行日常档位：
 
 ```powershell
-conda run --no-capture-output -n spider python -m src.notice_push --profile daily
+conda run --no-capture-output -n spider python -m notice_push --profile daily
 ```
 
 运行补历史/漏跑档位：
 
 ```powershell
-conda run --no-capture-output -n spider python -m src.notice_push --profile backfill
+conda run --no-capture-output -n spider python -m notice_push --profile backfill
 ```
 
 只运行某个通知源：
 
 ```powershell
-conda run --no-capture-output -n spider python -m src.notice_push --source shu_official
+conda run --no-capture-output -n spider python -m notice_push --source shu_official
 ```
 
 指定日期和输出目录：
 
 ```powershell
-conda run --no-capture-output -n spider python -m src.notice_push --date 2026-07-01 --output-dir resources/results
+conda run --no-capture-output -n spider python -m notice_push --date 2026-07-01 --output-dir resources/results
 ```
 
 可以通过 CLI 临时覆盖部分参数：
 
 ```powershell
-conda run --no-capture-output -n spider python -m src.notice_push --profile daily --max-pages-per-source 2 --detail-max-workers 1
+conda run --no-capture-output -n spider python -m notice_push --profile daily --max-pages-per-source 2 --detail-max-workers 1
 ```
 
 ## 输出文件
@@ -234,7 +234,7 @@ conda run --no-capture-output -n spider python -m src.notice_push --profile dail
 通常需要：
 
 1. 在 `runtime.yml` 的 `sources` 中添加来源配置。
-2. 在 `src/notice_push/sources/` 下实现新的 Adapter。
+2. 在 `notice_push/sources/` 下实现新的 Adapter。
 3. 为目录页解析、详情页解析和翻页逻辑添加测试。
 4. 根据需要调整提示词和日报模板。
 
@@ -249,7 +249,7 @@ conda run --no-capture-output -n spider pytest -q
 编译检查：
 
 ```powershell
-conda run --no-capture-output -n spider python -m compileall -q src
+conda run --no-capture-output -n spider python -m compileall -q notice_push
 ```
 
 清理空日报文件：
@@ -261,15 +261,18 @@ conda run --no-capture-output -n spider python scripts/clean_empty_results.py
 ## 项目结构
 
 ```text
-src/notice_push/
-  __main__.py          CLI 入口
-  config.py            YAML 和环境变量加载
-  pipeline.py          抓取、详情解析、摘要、报告主流程
-  storage.py           SQLite 状态管理
-  summarizer.py        LLM 摘要客户端与模型路由
-  media.py             PDF/图片下载与转换
-  report.py            Markdown 日报渲染
-  sources/             各通知源 Adapter
+notice_push/
+  cli.py              CLI 参数解析和命令分发
+  app_factory.py      HTTP、Storage、LLM、Pipeline 装配
+  settings/           YAML 配置加载和 profile 默认值
+  domain/             Notice、Result、Runtime dataclass
+  crawler/            目录扫描、详情抓取、失败分类、已见通知刷新
+  storage/            SQLite schema、序列化、健康检查
+  llm/                DeepSeek/Kimi 摘要、路由、提示词修复
+  parsing/            HTML 正文、附件、PDF/image/video 解析
+  reporting/          Markdown 日报和资源链接
+  observability/      doctor、source audit、run summary
+  sources/            三个通知源 Adapter
 
 resources/
   config/runtime.yml   运行配置

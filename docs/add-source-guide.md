@@ -1,6 +1,6 @@
 # 新增通知源指南
 
-本文档用于给 `SHU-Notice-Push` 增加新的通知源。新增来源时，请优先复用现有 `src.notice_push` 分层：`runtime.yml` 负责配置，`sources/` 下的 Adapter 负责解析，pipeline 负责抓取、详情、摘要和报告。
+本文档用于给 `SHU-Notice-Push` 增加新的通知源。新增来源时，请优先复用现有 `notice_push` 分层：`runtime.yml` 负责配置，`sources/` 下的 Adapter 负责解析，pipeline 负责抓取、详情、摘要和报告。
 
 ## 1. 在 runtime.yml 添加来源
 
@@ -12,7 +12,7 @@ sources:
     name: 新通知源名称
     base_url: https://example.shu.edu.cn/
     list_url: https://example.shu.edu.cn/notices.htm
-    adapter: src.notice_push.sources.new_source.NewSourceAdapter
+    adapter: notice_push.sources.new_source.NewSourceAdapter
     enabled: true
 ```
 
@@ -26,16 +26,16 @@ sources:
 
 ## 2. 实现 Adapter
 
-在 `src/notice_push/sources/` 下新增文件，例如 `new_source.py`，实现 `NoticeSourceAdapter`：
+在 `notice_push/sources/` 下新增文件，例如 `new_source.py`，实现 `NoticeSourceAdapter`：
 
 ```python
 from __future__ import annotations
 
 from bs4 import BeautifulSoup
 
-from src.notice_push.html_utils import clean_text
-from src.notice_push.models import NoticeDetail, NoticeListItem
-from src.notice_push.sources.base import NoticeSourceAdapter
+from notice_push.domain.notices import NoticeDetail, NoticeListItem
+from notice_push.parsing.html import clean_text
+from notice_push.sources.base import NoticeSourceAdapter
 
 
 class NewSourceAdapter(NoticeSourceAdapter):
@@ -109,17 +109,17 @@ tests/fixtures/source_pages/
 ```powershell
 conda run --no-capture-output -n spider pytest tests/notice_push/test_sources.py -q
 conda run --no-capture-output -n spider pytest -q
-conda run --no-capture-output -n spider python -m compileall -q src
+conda run --no-capture-output -n spider python -m compileall -q notice_push
 ```
 
 需要做真实抓取 smoke test 时，请使用隔离状态库，避免污染真实数据：
 
 ```powershell
-conda run --no-capture-output -n spider python -m src.notice_push --dry-run --source new_source --state-path .tmp/new-source-smoke/state.sqlite3 --output-dir .tmp/new-source-smoke/results
+conda run --no-capture-output -n spider python -m notice_push --dry-run --source new_source --state-path .tmp/new-source-smoke/state.sqlite3 --output-dir .tmp/new-source-smoke/results
 ```
 
 提交前再运行 doctor：
 
 ```powershell
-conda run --no-capture-output -n spider python -m src.notice_push --doctor
+conda run --no-capture-output -n spider python -m notice_push --doctor
 ```

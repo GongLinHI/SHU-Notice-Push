@@ -2,15 +2,12 @@ from datetime import datetime
 
 import pytest
 
-from src.notice_push.models import Attachment, MediaPolicy, NoticeAsset, NoticeDetail
-from src.notice_push.summarizer import (
-    KimiMultimodalSummarizer,
-    NoticeSummarizer,
-    SummarizerRouter,
-    load_prompt,
-    render_notice_user_prompt,
-)
-from src.notice_push.summary_validator import normalize_summary_markdown, validate_summary_markdown
+from notice_push.domain import Attachment, MediaPolicy, NoticeAsset, NoticeDetail
+from notice_push.llm.kimi import KimiMultimodalSummarizer
+from notice_push.llm.prompts import load_prompt, render_notice_user_prompt
+from notice_push.llm.router import SummarizerRouter
+from notice_push.llm.text import NoticeSummarizer
+from notice_push.summary_validator import normalize_summary_markdown, validate_summary_markdown
 
 
 VALID_SUMMARY = "\n".join(
@@ -295,7 +292,7 @@ def test_summarizer_retries_with_exponential_backoff_and_timeout(tmp_path, monke
     fake_client = _FakeClient()
     fake_client.chat.completions = _FlakyCompletions()
     sleep_calls = []
-    monkeypatch.setattr("src.notice_push.llm_chat.time.sleep", sleep_calls.append)
+    monkeypatch.setattr("notice_push.llm.chat.time.sleep", sleep_calls.append)
     summarizer = NoticeSummarizer(
         prompt_dir=prompt_dir,
         prompt_name="notice_summary_v1",

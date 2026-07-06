@@ -3,10 +3,13 @@ from pathlib import Path
 
 import pytest
 
-from src.notice_push.__main__ import build_pipeline, main
-from src.notice_push.config import load_config
-from src.notice_push.models import MediaPolicy, PipelineResult, PipelineRunOptions, SourceAuditIssue, SourceAuditResult
-from src.notice_push.summarizer import KimiMultimodalSummarizer, NoticeSummarizer, SummarizerRouter
+from notice_push.app_factory import build_pipeline
+from notice_push.cli import main
+from notice_push.llm.kimi import KimiMultimodalSummarizer
+from notice_push.llm.router import SummarizerRouter
+from notice_push.llm.text import NoticeSummarizer
+from notice_push.settings.loader import load_config
+from notice_push.domain import MediaPolicy, PipelineResult, PipelineRunOptions, SourceAuditIssue, SourceAuditResult
 
 
 class FakePipeline:
@@ -57,7 +60,7 @@ def test_cli_passes_runtime_flags_and_dry_run_returns_success(monkeypatch, tmp_p
         captured["profile"] = profile
         return fake_pipeline
 
-    monkeypatch.setattr("src.notice_push.__main__.build_pipeline", fake_build_pipeline)
+    monkeypatch.setattr("notice_push.cli.build_pipeline", fake_build_pipeline)
 
     exit_code = main(
         [
@@ -112,7 +115,7 @@ def test_cli_applies_daily_profile_defaults(monkeypatch):
         captured["profile"] = profile
         return fake_pipeline
 
-    monkeypatch.setattr("src.notice_push.__main__.build_pipeline", fake_build_pipeline)
+    monkeypatch.setattr("notice_push.cli.build_pipeline", fake_build_pipeline)
 
     exit_code = main(["--dry-run", "--profile", "daily"])
 
@@ -133,7 +136,7 @@ def test_cli_applies_daily_profile_defaults(monkeypatch):
 def test_cli_applies_backfill_profile_defaults(monkeypatch):
     fake_pipeline = FakePipeline()
 
-    monkeypatch.setattr("src.notice_push.__main__.build_pipeline", lambda config, profile: fake_pipeline)
+    monkeypatch.setattr("notice_push.cli.build_pipeline", lambda config, profile: fake_pipeline)
 
     exit_code = main(["--dry-run", "--profile", "backfill"])
 
@@ -149,7 +152,7 @@ def test_cli_applies_backfill_profile_defaults(monkeypatch):
 def test_cli_prefers_explicit_runtime_flags_over_profile(monkeypatch):
     fake_pipeline = FakePipeline()
 
-    monkeypatch.setattr("src.notice_push.__main__.build_pipeline", lambda config, profile: fake_pipeline)
+    monkeypatch.setattr("notice_push.cli.build_pipeline", lambda config, profile: fake_pipeline)
 
     exit_code = main(
         [
@@ -177,7 +180,7 @@ def test_cli_prefers_explicit_runtime_flags_over_profile(monkeypatch):
 def test_cli_can_skip_source_audit(monkeypatch):
     fake_pipeline = FakePipeline()
 
-    monkeypatch.setattr("src.notice_push.__main__.build_pipeline", lambda config, profile: fake_pipeline)
+    monkeypatch.setattr("notice_push.cli.build_pipeline", lambda config, profile: fake_pipeline)
 
     exit_code = main(["--dry-run", "--skip-source-audit"])
 
@@ -187,7 +190,7 @@ def test_cli_can_skip_source_audit(monkeypatch):
 
 def test_cli_rejects_unknown_source_before_running_pipeline(monkeypatch):
     fake_pipeline = FakePipeline()
-    monkeypatch.setattr("src.notice_push.__main__.build_pipeline", lambda config, profile: fake_pipeline)
+    monkeypatch.setattr("notice_push.cli.build_pipeline", lambda config, profile: fake_pipeline)
 
     with pytest.raises(SystemExit) as exc_info:
         main(["--dry-run", "--source", "missing_source"])
@@ -201,7 +204,7 @@ def test_cli_returns_one_when_normal_run_has_no_new_notices(monkeypatch):
         def run(self, options):
             return PipelineResult(report_path=None, new_count=0, summarized_count=0)
 
-    monkeypatch.setattr("src.notice_push.__main__.build_pipeline", lambda config, profile: EmptyPipeline())
+    monkeypatch.setattr("notice_push.cli.build_pipeline", lambda config, profile: EmptyPipeline())
 
     assert main([]) == 1
 
@@ -211,7 +214,7 @@ def test_cli_returns_zero_when_report_is_generated(monkeypatch, tmp_path):
         def run(self, options):
             return PipelineResult(report_path=Path("resources/results/2026-06-30.md"), new_count=1, summarized_count=1)
 
-    monkeypatch.setattr("src.notice_push.__main__.build_pipeline", lambda config, profile: ReportPipeline())
+    monkeypatch.setattr("notice_push.cli.build_pipeline", lambda config, profile: ReportPipeline())
 
     assert main(["--state-path", str(tmp_path / "state.sqlite3"), "--output-dir", str(tmp_path)]) == 0
 
@@ -225,7 +228,7 @@ def test_cli_returns_zero_when_failure_only_report_is_generated(monkeypatch, tmp
                 summarized_count=0,
             )
 
-    monkeypatch.setattr("src.notice_push.__main__.build_pipeline", lambda config, profile: FailureOnlyPipeline())
+    monkeypatch.setattr("notice_push.cli.build_pipeline", lambda config, profile: FailureOnlyPipeline())
 
     assert main(["--state-path", str(tmp_path / "state.sqlite3"), "--output-dir", str(tmp_path)]) == 0
 
@@ -233,7 +236,7 @@ def test_cli_returns_zero_when_failure_only_report_is_generated(monkeypatch, tmp
 def test_cli_prints_source_error_count_for_no_report(monkeypatch, tmp_path, capsys):
     class SourceErrorPipeline:
         def run(self, options):
-            from src.notice_push.models import SourceError
+            from notice_push.domain import SourceError
 
             return PipelineResult(
                 report_path=None,
@@ -249,7 +252,7 @@ def test_cli_prints_source_error_count_for_no_report(monkeypatch, tmp_path, caps
                 ),
             )
 
-    monkeypatch.setattr("src.notice_push.__main__.build_pipeline", lambda config, profile: SourceErrorPipeline())
+    monkeypatch.setattr("notice_push.cli.build_pipeline", lambda config, profile: SourceErrorPipeline())
 
     assert main(["--state-path", str(tmp_path / "state.sqlite3"), "--output-dir", str(tmp_path)]) == 1
     output = capsys.readouterr().out
@@ -292,7 +295,7 @@ def test_cli_prints_audit_counts(monkeypatch, tmp_path, capsys):
                 ),
             )
 
-    monkeypatch.setattr("src.notice_push.__main__.build_pipeline", lambda config, profile: AuditPipeline())
+    monkeypatch.setattr("notice_push.cli.build_pipeline", lambda config, profile: AuditPipeline())
 
     assert main(["--state-path", str(tmp_path / "state.sqlite3"), "--output-dir", str(tmp_path)]) == 1
     output = capsys.readouterr().out
@@ -323,8 +326,8 @@ def test_cli_audit_only_returns_one_for_audit_errors_without_building_pipeline(m
             ),
         )
 
-    monkeypatch.setattr("src.notice_push.__main__.build_pipeline", fail_build_pipeline)
-    monkeypatch.setattr("src.notice_push.__main__.run_source_audit", fake_run_source_audit)
+    monkeypatch.setattr("notice_push.cli.build_pipeline", fail_build_pipeline)
+    monkeypatch.setattr("notice_push.cli.run_source_audit", fake_run_source_audit)
 
     exit_code = main(["--audit-only", "--state-path", str(tmp_path / "state.sqlite3")])
 
@@ -340,7 +343,7 @@ def test_cli_doctor_warns_without_building_pipeline(monkeypatch, tmp_path, capsy
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "")
     monkeypatch.setenv("KIMI_API_KEY", "")
-    monkeypatch.setattr("src.notice_push.__main__.build_pipeline", fail_build_pipeline)
+    monkeypatch.setattr("notice_push.cli.build_pipeline", fail_build_pipeline)
 
     exit_code = main(["--doctor", "--state-path", str(tmp_path / "state.sqlite3")])
 
@@ -354,7 +357,7 @@ def test_cli_doctor_returns_two_for_structural_errors(monkeypatch, tmp_path, cap
     def fake_run_doctor(config):
         return ("error: no enabled sources", "warning: KIMI_API_KEY is not set")
 
-    monkeypatch.setattr("src.notice_push.__main__.run_doctor", fake_run_doctor)
+    monkeypatch.setattr("notice_push.cli.run_doctor", fake_run_doctor)
 
     exit_code = main(["--doctor", "--state-path", str(tmp_path / "state.sqlite3")])
 
@@ -367,7 +370,7 @@ def test_cli_doctor_returns_two_for_structural_errors(monkeypatch, tmp_path, cap
 def test_cli_doctor_reports_prompt_field_errors(monkeypatch, tmp_path, capsys):
     _write_doctor_repo_files(tmp_path, prompt_text="输出要求缺少结构化字段")
     config = load_config(env={}, repo_root=tmp_path, state_path=tmp_path / "state.sqlite3")
-    monkeypatch.setattr("src.notice_push.__main__.load_config", lambda **kwargs: config)
+    monkeypatch.setattr("notice_push.cli.load_config", lambda **kwargs: config)
 
     exit_code = main(["--doctor"])
 
@@ -380,7 +383,7 @@ def test_cli_doctor_reports_invalid_media_policy(monkeypatch, tmp_path, capsys):
     _write_doctor_repo_files(tmp_path)
     config = load_config(env={}, repo_root=tmp_path, state_path=tmp_path / "state.sqlite3")
     config = replace(config, media_policy=MediaPolicy(pdf_max_bytes=0, image_max_bytes=1, pdf_extracted_text_max_chars=1))
-    monkeypatch.setattr("src.notice_push.__main__.load_config", lambda **kwargs: config)
+    monkeypatch.setattr("notice_push.cli.load_config", lambda **kwargs: config)
 
     exit_code = main(["--doctor"])
 
@@ -400,7 +403,7 @@ def test_cli_prints_retry_and_manual_review_counts(monkeypatch, tmp_path, capsys
                 manual_review_count=1,
             )
 
-    monkeypatch.setattr("src.notice_push.__main__.build_pipeline", lambda config, profile: RetryPipeline())
+    monkeypatch.setattr("notice_push.cli.build_pipeline", lambda config, profile: RetryPipeline())
 
     assert main(["--state-path", str(tmp_path / "state.sqlite3"), "--output-dir", str(tmp_path)]) == 0
     output = capsys.readouterr().out
@@ -419,7 +422,7 @@ def test_cli_prints_run_summary_path(monkeypatch, tmp_path, capsys):
                 summarized_count=1,
             )
 
-    monkeypatch.setattr("src.notice_push.__main__.build_pipeline", lambda config, profile: RunSummaryPipeline())
+    monkeypatch.setattr("notice_push.cli.build_pipeline", lambda config, profile: RunSummaryPipeline())
 
     assert main(["--state-path", str(tmp_path / "state.sqlite3"), "--output-dir", str(tmp_path)]) == 0
     output = capsys.readouterr().out

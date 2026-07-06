@@ -17,7 +17,7 @@ jobs:
       - name: Check workflows
         uses: rhysd/actionlint@v1
       - run: pip install -r requirements.txt
-      - run: python -m src.notice_push --doctor
+      - run: python -m notice_push --doctor
       - run: pytest tests/notice_push/test_cli.py tests/notice_push/test_sources.py -q
       - run: pytest -q
-      - run: python -m compileall -q src
+      - run: python -m compileall -q notice_push
