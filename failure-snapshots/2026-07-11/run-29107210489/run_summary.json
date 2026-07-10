@@ -1,0 +1,60 @@
+{
+  "audit_error_count": 0,
+  "audit_issues": [],
+  "audit_warning_count": 0,
+  "duration_seconds": 45.736,
+  "failed_count": 0,
+  "failure_types": {},
+  "finished_at": "2026-07-10T16:24:32+00:00",
+  "git_sha": "85fae974a172c2a3172dc8c285d802be270d5b7a",
+  "manual_review_count": 0,
+  "media_counts": {},
+  "models": [
+    "deepseek-v4-flash"
+  ],
+  "new_count": 1,
+  "publication_blockers": [],
+  "publication_eligibility": "published",
+  "refresh_seen_error_count": 0,
+  "report_date": "2026-07-11",
+  "report_path": "/home/runner/work/SHU-Notice-Push/SHU-Notice-Push/resources/results/2026-07-11.md",
+  "retried_count": 0,
+  "schema_version": 2,
+  "source_error_count": 0,
+  "source_errors": [],
+  "sources": [
+    {
+      "audit_error_count": 0,
+      "audit_warning_count": 0,
+      "failed_count": 0,
+      "refresh_seen_error_count": 0,
+      "source_error_count": 0,
+      "source_id": "shu_official",
+      "source_name": "上海大学官网",
+      "summarized_count": 13
+    },
+    {
+      "audit_error_count": 0,
+      "audit_warning_count": 0,
+      "failed_count": 0,
+      "refresh_seen_error_count": 0,
+      "source_error_count": 0,
+      "source_id": "management_school",
+      "source_name": "上海大学管理学院",
+      "summarized_count": 0
+    },
+    {
+      "audit_error_count": 0,
+      "audit_warning_count": 0,
+      "failed_count": 0,
+      "refresh_seen_error_count": 0,
+      "source_error_count": 0,
+      "source_id": "graduate_school",
+      "source_name": "上海大学研究生院",
+      "summarized_count": 1
+    }
+  ],
+  "started_at": "2026-07-10T16:23:46+00:00",
+  "summarized_count": 14,
+  "updated_count": 13
+}

@@ -1,0 +1,37 @@
+{
+  "alert_email_requested": true,
+  "artifact_name": "notice-failure-snapshot-2026-07-11-29107210489",
+  "counts": {
+    "audit_error_count": 0,
+    "audit_warning_count": 0,
+    "failed_count": 0,
+    "manual_review_count": 0,
+    "new_count": 1,
+    "refresh_seen_error_count": 0,
+    "retried_count": 0,
+    "source_error_count": 0,
+    "summarized_count": 14,
+    "updated_count": 13
+  },
+  "failure_detail": "",
+  "failure_snapshot_branch": "bot/failure-snapshots",
+  "failure_snapshot_path": "failure-snapshots/2026-07-11/run-29107210489",
+  "failure_snapshot_push_status": "pending",
+  "git_sha": "85fae974a172c2a3172dc8c285d802be270d5b7a",
+  "master_state_updated": false,
+  "pipeline_exit_code": 0,
+  "publication_blockers": [
+    "html_render_failed"
+  ],
+  "publication_status": "blocked",
+  "report_date": "2026-07-11",
+  "report_email_sent": false,
+  "report_exists": true,
+  "report_path": "/home/runner/work/SHU-Notice-Push/SHU-Notice-Push/resources/results/2026-07-11.md",
+  "run_summary_path": "/home/runner/work/SHU-Notice-Push/SHU-Notice-Push/resources/results/json/2026-07-11.json",
+  "schema_version": 1,
+  "state_snapshot_available": true,
+  "trigger": "workflow_dispatch",
+  "workflow_run_id": "29107210489",
+  "workflow_url": "https://github.com/GongLinHI/SHU-Notice-Push/actions/runs/29107210489"
+}
