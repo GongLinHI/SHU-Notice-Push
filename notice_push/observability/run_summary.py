@@ -6,6 +6,7 @@ from datetime import date
 from pathlib import Path
 
 from notice_push.domain import PipelineCounters, PipelineResult
+from notice_push.observability.publication import PublicationFacts, decide_pipeline_publication
 
 
 def write_run_summary(output_dir: Path, report_date: date, pipeline_result: PipelineResult) -> Path:
@@ -27,7 +28,15 @@ def write_run_summary(output_dir: Path, report_date: date, pipeline_result: Pipe
 
 def _run_summary_payload(report_date: date, pipeline_result: PipelineResult) -> dict[str, object]:
     counters = pipeline_counters(pipeline_result)
+    publication = decide_pipeline_publication(
+        PublicationFacts(
+            report_path=str(pipeline_result.report_path or ""),
+            source_error_count=counters.source_error_count,
+            audit_error_count=counters.audit_error_count,
+        )
+    )
     return {
+        "schema_version": 2,
         "report_date": report_date.isoformat(),
         "new_count": counters.new_count,
         "updated_count": counters.updated_count,
@@ -39,11 +48,33 @@ def _run_summary_payload(report_date: date, pipeline_result: PipelineResult) -> 
         "audit_error_count": counters.audit_error_count,
         "audit_warning_count": counters.audit_warning_count,
         "refresh_seen_error_count": counters.refresh_seen_error_count,
+        "publication_eligibility": publication.status.value,
+        "publication_blockers": list(publication.blockers),
         "started_at": pipeline_result.started_at,
         "finished_at": pipeline_result.finished_at,
         "duration_seconds": pipeline_result.duration_seconds,
         "git_sha": pipeline_result.git_sha,
         "failure_types": _failure_types(pipeline_result),
+        "source_errors": [
+            {
+                "source_id": error.source_id,
+                "source_name": error.source_name,
+                "url": error.url,
+                "reason": error.reason,
+            }
+            for error in pipeline_result.source_errors
+        ],
+        "audit_issues": [
+            {
+                "source_id": issue.source_id,
+                "source_name": issue.source_name,
+                "url": issue.url,
+                "severity": issue.severity,
+                "reason": issue.reason,
+            }
+            for audit in pipeline_result.audit_results
+            for issue in audit.issues
+        ],
         "models": list(pipeline_result.models_used),
         "media_counts": pipeline_result.media_counts,
         "sources": [

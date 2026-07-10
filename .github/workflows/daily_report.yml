@@ -12,6 +12,12 @@ concurrency:
 permissions:
   contents: write
 
+env:
+  FAILURE_SNAPSHOT_BRANCH: bot/failure-snapshots
+  FAILURE_SNAPSHOT_RETENTION_DAYS: "90"
+  FAILURE_SNAPSHOT_MAX_SCAN_ENTRIES: "200"
+  FAILURE_SNAPSHOT_ARTIFACT_RETENTION_DAYS: "30"
+
 jobs:
   generate-and-send:
     runs-on: ubuntu-latest
@@ -37,8 +43,9 @@ jobs:
       - name: Backup SQLite state
         id: backup_state
         run: |
-          if [ -f resources/notice_state.sqlite3 ]; then
-            cp resources/notice_state.sqlite3 "$RUNNER_TEMP/notice_state_before_run.sqlite3"
+          if python -m scripts.workflow.backup_sqlite \
+            --source resources/notice_state.sqlite3 \
+            --destination "$RUNNER_TEMP/notice_state_before_run.sqlite3"; then
             echo "backup_exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "backup_exists=false" >> "$GITHUB_OUTPUT"
@@ -48,41 +55,11 @@ jobs:
         id: run_python_script
         run: |
           set +e
-          output=$(python -m notice_push --profile daily --date "${{ steps.date.outputs.date }}" 2>&1)
-          exit_code=$?
-          echo "$output"
-          printf '%s\n' "$output" > "$RUNNER_TEMP/notice_pipeline.log"
-
-          new_count=$(echo "$output" | awk -F= '/^new_count=/{print $2}' | tail -n1)
-          updated_count=$(echo "$output" | awk -F= '/^updated_count=/{print $2}' | tail -n1)
-          retried_count=$(echo "$output" | awk -F= '/^retried_count=/{print $2}' | tail -n1)
-          summarized_count=$(echo "$output" | awk -F= '/^summarized_count=/{print $2}' | tail -n1)
-          failed_count=$(echo "$output" | awk -F= '/^failed_count=/{print $2}' | tail -n1)
-          manual_review_count=$(echo "$output" | awk -F= '/^manual_review_count=/{print $2}' | tail -n1)
-          source_error_count=$(echo "$output" | awk -F= '/^source_error_count=/{print $2}' | tail -n1)
-          audit_error_count=$(echo "$output" | awk -F= '/^audit_error_count=/{print $2}' | tail -n1)
-          audit_warning_count=$(echo "$output" | awk -F= '/^audit_warning_count=/{print $2}' | tail -n1)
-          refresh_seen_error_count=$(echo "$output" | awk -F= '/^refresh_seen_error_count=/{print $2}' | tail -n1)
-
-          if [ "$exit_code" -ne 0 ] && [ "$exit_code" -ne 1 ]; then
-            echo "::error::Notice pipeline exited with unexpected code $exit_code."
-            exit_code=2
-          elif [ "$exit_code" -eq 1 ] && ! echo "$output" | grep -q '^new_count='; then
-            echo "::error::Notice pipeline failed before reporting counts."
-            exit_code=2
-          fi
-
-          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
-          echo "new_count=${new_count:-0}" >> "$GITHUB_OUTPUT"
-          echo "updated_count=${updated_count:-0}" >> "$GITHUB_OUTPUT"
-          echo "retried_count=${retried_count:-0}" >> "$GITHUB_OUTPUT"
-          echo "summarized_count=${summarized_count:-0}" >> "$GITHUB_OUTPUT"
-          echo "failed_count=${failed_count:-0}" >> "$GITHUB_OUTPUT"
-          echo "manual_review_count=${manual_review_count:-0}" >> "$GITHUB_OUTPUT"
-          echo "source_error_count=${source_error_count:-0}" >> "$GITHUB_OUTPUT"
-          echo "audit_error_count=${audit_error_count:-0}" >> "$GITHUB_OUTPUT"
-          echo "audit_warning_count=${audit_warning_count:-0}" >> "$GITHUB_OUTPUT"
-          echo "refresh_seen_error_count=${refresh_seen_error_count:-0}" >> "$GITHUB_OUTPUT"
+          python -m notice_push --profile daily --date "${{ steps.date.outputs.date }}" \
+            > "$RUNNER_TEMP/notice_pipeline.log" 2>&1
+          raw_exit_code=$?
+          cat "$RUNNER_TEMP/notice_pipeline.log"
+          echo "raw_exit_code=$raw_exit_code" >> "$GITHUB_OUTPUT"
           echo "log_path=$RUNNER_TEMP/notice_pipeline.log" >> "$GITHUB_OUTPUT"
           exit 0
         working-directory: ${{ github.workspace }}
@@ -92,8 +69,37 @@ jobs:
           KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
           KIMI_MODEL: ${{ secrets.KIMI_MODEL || 'kimi-k2.7-code' }}
 
+      - name: Evaluate initial publication
+        id: initial_publication
+        if: always()
+        run: |
+          if ! python -m scripts.workflow.evaluate_publication \
+            --pipeline-log "${{ steps.run_python_script.outputs.log_path }}" \
+            --raw-exit-code "${{ steps.run_python_script.outputs.raw_exit_code }}" \
+            --workspace "$GITHUB_WORKSPACE" \
+            --report-date "${{ steps.date.outputs.date }}" \
+            --run-id "${{ github.run_id }}" \
+            --workflow-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --trigger "${{ github.event_name }}" \
+            --git-sha "${{ github.sha }}" \
+            --failure-snapshot-branch "$FAILURE_SNAPSHOT_BRANCH" \
+            --candidate-publication-json "$RUNNER_TEMP/candidate-publication.json" \
+            --github-output "$GITHUB_OUTPUT"; then
+            python -m scripts.workflow.write_blocked_publication_fallback \
+              --report-date "${{ steps.date.outputs.date }}" \
+              --run-id "${{ github.run_id }}" \
+              --workflow-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+              --trigger "${{ github.event_name }}" \
+              --git-sha "${{ github.sha }}" \
+              --blocker publication_evaluator_failed \
+              --failure-snapshot-branch "$FAILURE_SNAPSHOT_BRANCH" \
+              --output-prefix initial_ \
+              --publication-json "$RUNNER_TEMP/candidate-publication.json" \
+              --github-output "$GITHUB_OUTPUT"
+          fi
+
       - name: Upload SQLite backup
-        if: steps.backup_state.outputs.backup_exists == 'true'
+        if: always() && steps.backup_state.outputs.backup_exists == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: notice-state-before-run-${{ steps.date.outputs.date }}
@@ -101,6 +107,7 @@ jobs:
           retention-days: 14
 
       - name: Upload run summary JSON
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: notice-run-summary-${{ steps.date.outputs.date }}
@@ -108,97 +115,82 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-      - name: Check if there are new notices
-        id: check_notices
-        run: |
-          if [ "${{ steps.run_python_script.outputs.exit_code }}" = "0" ]; then
-            echo "has_new_notices=true" >> "$GITHUB_OUTPUT"
-            echo "Found reportable notices or failures."
-          else
-            echo "has_new_notices=false" >> "$GITHUB_OUTPUT"
-            echo "No reportable new notices found today; source_error_count=${{ steps.run_python_script.outputs.source_error_count }}; audit_error_count=${{ steps.run_python_script.outputs.audit_error_count }}."
-          fi
-
-      - name: Prepare operational alert email
-        id: prepare_alert
-        if: steps.run_python_script.outputs.source_error_count != '0' || steps.run_python_script.outputs.audit_error_count != '0' || steps.run_python_script.outputs.exit_code == '2'
-        run: |
-          alert_file="$RUNNER_TEMP/notice_alert.html"
-          {
-            echo '<!doctype html><html><body style="font-family:Arial,sans-serif;line-height:1.6;color:#1f2937;">'
-            echo '<h2>上海大学通知推送运行异常</h2>'
-            echo '<p>本邮件只表示爬虫运行或源站访问异常，不代表今日存在新通知。</p>'
-            echo '<ul>'
-            echo '<li>报告日期: ${{ steps.date.outputs.date }}</li>'
-            echo '<li>pipeline_exit_code: ${{ steps.run_python_script.outputs.exit_code }}</li>'
-            echo '<li>source_error_count（正式抓取目录页异常）: ${{ steps.run_python_script.outputs.source_error_count }}</li>'
-            echo '<li>audit_error_count（运行前 DOM 巡检异常）: ${{ steps.run_python_script.outputs.audit_error_count }}</li>'
-            echo '<li>audit_warning_count（运行前 DOM 巡检警告）: ${{ steps.run_python_script.outputs.audit_warning_count }}</li>'
-            echo '<li>refresh_seen_error_count（已见通知详情刷新异常）: ${{ steps.run_python_script.outputs.refresh_seen_error_count }}</li>'
-            echo '<li>failed_count: ${{ steps.run_python_script.outputs.failed_count }}</li>'
-            echo '<li>workflow: <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">查看 GitHub Actions 日志</a></li>'
-            echo '</ul>'
-            echo '<h3>Pipeline 输出</h3>'
-            echo '<pre style="white-space:pre-wrap;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;padding:12px;">'
-            sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g' "${{ steps.run_python_script.outputs.log_path }}"
-            echo '</pre>'
-            echo '</body></html>'
-          } > "$alert_file"
-          echo "alert_path=$alert_file" >> "$GITHUB_OUTPUT"
-
-      - name: Send operational alert email
-        if: steps.run_python_script.outputs.source_error_count != '0' || steps.run_python_script.outputs.audit_error_count != '0' || steps.run_python_script.outputs.exit_code == '2'
-        uses: dawidd6/action-send-mail@v3
-        with:
-          server_address: ${{ secrets.MAIL_SERVER_ADDRESS }}
-          server_port: ${{ secrets.MAIL_SERVER_PORT }}
-          secure: true
-          username: ${{ secrets.MAIL_USERNAME }}
-          password: ${{ secrets.MAIL_PASSWORD }}
-          subject: '上海大学通知推送运行异常 - ${{ steps.date.outputs.date }} - 源站异常 ${{ steps.run_python_script.outputs.source_error_count }} 个 - 巡检异常 ${{ steps.run_python_script.outputs.audit_error_count }} 个'
-          to: ${{ secrets.MAIL_TO }}
-          from: ${{ secrets.MAIL_USERNAME }}
-          html_body: file://${{ steps.prepare_alert.outputs.alert_path }}
-
-      - name: Fail if notice pipeline errored
-        if: steps.run_python_script.outputs.exit_code == '2'
-        run: |
-          echo "::error::Python 脚本执行失败，exit_code=${{ steps.run_python_script.outputs.exit_code }}。"
-          exit 1
-
-      - name: Check if today's markdown file exists
-        id: check_file
-        if: steps.check_notices.outputs.has_new_notices == 'true'
-        run: |
-          if [ -f "resources/results/${{ steps.date.outputs.date }}.md" ]; then
-            echo "found=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "found=false" >> "$GITHUB_OUTPUT"
-            echo "::warning file=resources/results::未找到今日的 Markdown 文件，跳过后续步骤。"
-          fi
-
       - name: Render Markdown to HTML
-        if: steps.check_file.outputs.found == 'true'
+        id: render_html
+        if: steps.initial_publication.outputs.initial_publication_status == 'published'
+        continue-on-error: true
         run: |
           sudo apt-get update
           sudo apt-get install -y pandoc
           mkdir -p resources/results/html
           pandoc \
-            resources/results/${{ steps.date.outputs.date }}.md \
+            "${{ steps.initial_publication.outputs.initial_report_path }}" \
             -f markdown -t html5 --standalone \
             --template=resources/templates/daily_report.html \
             --metadata=title:上海大学通知汇总 \
             --metadata=report_date:${{ steps.date.outputs.date }} \
-            --metadata=new_count:${{ steps.run_python_script.outputs.new_count }} \
-            --metadata=updated_count:${{ steps.run_python_script.outputs.updated_count }} \
-            --metadata=retried_count:${{ steps.run_python_script.outputs.retried_count }} \
-            --metadata=summarized_count:${{ steps.run_python_script.outputs.summarized_count }} \
-            --metadata=failed_count:${{ steps.run_python_script.outputs.failed_count }} \
-            --metadata=manual_review_count:${{ steps.run_python_script.outputs.manual_review_count }} \
+            --metadata=new_count:${{ steps.initial_publication.outputs.initial_new_count }} \
+            --metadata=updated_count:${{ steps.initial_publication.outputs.initial_updated_count }} \
+            --metadata=retried_count:${{ steps.initial_publication.outputs.initial_retried_count }} \
+            --metadata=summarized_count:${{ steps.initial_publication.outputs.initial_summarized_count }} \
+            --metadata=failed_count:${{ steps.initial_publication.outputs.initial_failed_count }} \
+            --metadata=manual_review_count:${{ steps.initial_publication.outputs.initial_manual_review_count }} \
             -o resources/results/html/${{ steps.date.outputs.date }}.html
 
-      - name: Send Email
-        if: steps.check_file.outputs.found == 'true'
+      - name: Publish formal master state
+        id: publish_master
+        if: steps.initial_publication.outputs.initial_publication_status == 'no_report' || (steps.initial_publication.outputs.initial_publication_status == 'published' && steps.render_html.outcome == 'success')
+        continue-on-error: true
+        run: |
+          python -m scripts.workflow.publish_master \
+            --repository "$GITHUB_WORKSPACE" \
+            --branch "$GITHUB_REF_NAME" \
+            --candidate-publication-json "$RUNNER_TEMP/candidate-publication.json" \
+            --result-json "$RUNNER_TEMP/master-publication.json" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Finalize publication
+        id: publication
+        if: always()
+        env:
+          RENDER_HTML_STATUS: ${{ steps.render_html.outcome }}
+          MASTER_PUBLISH_STATUS: ${{ steps.publish_master.outputs.status }}
+          MASTER_STATE_UPDATED: ${{ steps.publish_master.outputs.master_state_updated }}
+          MASTER_PUBLISH_ERROR: ${{ steps.publish_master.outputs.error }}
+        run: |
+          if ! python -m scripts.workflow.finalize_publication \
+            --candidate-publication-json "$RUNNER_TEMP/candidate-publication.json" \
+            --publication-json "$RUNNER_TEMP/publication.json" \
+            --report-date "${{ steps.date.outputs.date }}" \
+            --run-id "${{ github.run_id }}" \
+            --workflow-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --trigger "${{ github.event_name }}" \
+            --git-sha "${{ github.sha }}" \
+            --failure-snapshot-branch "$FAILURE_SNAPSHOT_BRANCH" \
+            --raw-exit-code "${{ steps.run_python_script.outputs.raw_exit_code }}" \
+            --render-html-status "${RENDER_HTML_STATUS:-skipped}" \
+            --master-publish-status "${MASTER_PUBLISH_STATUS:-failed}" \
+            --master-state-updated "${MASTER_STATE_UPDATED:-false}" \
+            --master-publish-error "${MASTER_PUBLISH_ERROR:-}" \
+            --github-output "$GITHUB_OUTPUT" \
+            || ! python -m scripts.workflow.validate_publication_result \
+              --publication-json "$RUNNER_TEMP/publication.json" \
+              --github-output "$GITHUB_OUTPUT"; then
+            python -m scripts.workflow.write_blocked_publication_fallback \
+              --report-date "${{ steps.date.outputs.date }}" \
+              --run-id "${{ github.run_id }}" \
+              --workflow-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+              --trigger "${{ github.event_name }}" \
+              --git-sha "${{ github.sha }}" \
+              --blocker publication_finalizer_failed \
+              --failure-snapshot-branch "$FAILURE_SNAPSHOT_BRANCH" \
+              --publication-json "$RUNNER_TEMP/publication.json" \
+              --github-output "$GITHUB_OUTPUT"
+          fi
+
+      - name: Send daily report email
+        id: send_report_email
+        if: steps.publication.outputs.publication_status == 'published'
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: ${{ secrets.MAIL_SERVER_ADDRESS }}
@@ -206,41 +198,128 @@ jobs:
           secure: true
           username: ${{ secrets.MAIL_USERNAME }}
           password: ${{ secrets.MAIL_PASSWORD }}
-          subject: '上海大学通知汇总 - ${{ steps.date.outputs.date }} - 新增 ${{ steps.run_python_script.outputs.new_count }} 条'
+          subject: '上海大学通知汇总 - ${{ steps.date.outputs.date }} - 新增 ${{ steps.publication.outputs.new_count }} 条'
           to: ${{ secrets.MAIL_TO }}
           from: ${{ secrets.MAIL_USERNAME }}
           html_body: file://resources/results/html/${{ steps.date.outputs.date }}.html
 
-      - name: Configure Git
-        if: steps.check_file.outputs.found == 'true' || steps.run_python_script.outputs.exit_code == '1'
-        run: |
-          git config --global user.name 'github-actions[bot]'
-          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+      - name: Report daily email delivery failure
+        if: always() && steps.publication.outputs.publication_status == 'published' && steps.send_report_email.outcome == 'failure'
+        run: echo "::error::正式数据已发布到 master，但日报邮件投递失败。"
 
-      - name: Commit and Push updated files
-        if: steps.check_file.outputs.found == 'true' || steps.run_python_script.outputs.exit_code == '1'
+      - name: Sanitize failure pipeline log
+        if: always() && steps.publication.outputs.publication_status == 'blocked'
+        continue-on-error: true
+        run: |
+          python -m scripts.workflow.sanitize_pipeline_log \
+            --source "${{ steps.run_python_script.outputs.log_path }}" \
+            --destination "$RUNNER_TEMP/sanitized-notice_pipeline.log" \
+            --secret-env DEEPSEEK_API_KEY \
+            --secret-env KIMI_API_KEY \
+            --secret-env MAIL_PASSWORD
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if [ "${{ steps.check_file.outputs.found }}" = "true" ]; then
-            git add resources/results
-          fi
-          if [ -f resources/notice_state.sqlite3 ]; then
-            git add resources/notice_state.sqlite3
-          fi
-          git restore --staged resources/results/html || true
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+          MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
 
-          if git diff --cached --quiet; then
-            echo "No changes to commit."
-          else
-            git commit \
-              -m "日报 ${{ steps.date.outputs.date }}: 新增 ${{ steps.run_python_script.outputs.new_count }} 更新 ${{ steps.run_python_script.outputs.updated_count }} 复核 ${{ steps.run_python_script.outputs.manual_review_count }} [bot]" \
-              -m "重试通知: ${{ steps.run_python_script.outputs.retried_count }}
-成功摘要: ${{ steps.run_python_script.outputs.summarized_count }}
-失败通知: ${{ steps.run_python_script.outputs.failed_count }}
-源站异常: ${{ steps.run_python_script.outputs.source_error_count }}
-巡检异常: ${{ steps.run_python_script.outputs.audit_error_count }}
-巡检警告: ${{ steps.run_python_script.outputs.audit_warning_count }}
-详情刷新异常: ${{ steps.run_python_script.outputs.refresh_seen_error_count }}"
-            git push origin HEAD:${{ github.ref }}
-          fi
+      - name: Build failure snapshot
+        id: build_failure_snapshot
+        if: always() && steps.publication.outputs.publication_status == 'blocked'
+        continue-on-error: true
+        run: |
+          mkdir -p "$RUNNER_TEMP/failure-snapshot"
+          python -m scripts.workflow.build_failure_snapshot \
+            --snapshot-root "$RUNNER_TEMP/failure-snapshot" \
+            --report-date "${{ steps.date.outputs.date }}" \
+            --run-id "${{ github.run_id }}" \
+            --pipeline-log "${{ steps.run_python_script.outputs.log_path }}" \
+            --publication-json "$RUNNER_TEMP/publication.json" \
+            --workspace "$GITHUB_WORKSPACE" \
+            --state-path resources/notice_state.sqlite3 \
+            --run-summary-path "${{ steps.publication.outputs.run_summary_path }}" \
+            --partial-report-path "${{ steps.publication.outputs.report_path }}" \
+            --secret-env DEEPSEEK_API_KEY \
+            --secret-env KIMI_API_KEY \
+            --secret-env MAIL_PASSWORD \
+            --github-output "$GITHUB_OUTPUT"
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+          MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
+
+      - name: Upload failure snapshot
+        if: always() && steps.publication.outputs.publication_status == 'blocked'
+        uses: actions/upload-artifact@v4
+        with:
+          name: notice-failure-snapshot-${{ steps.date.outputs.date }}-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/failure-snapshot
+            ${{ runner.temp }}/publication.json
+            ${{ runner.temp }}/sanitized-notice_pipeline.log
+          if-no-files-found: warn
+          retention-days: ${{ fromJSON(env.FAILURE_SNAPSHOT_ARTIFACT_RETENTION_DAYS) }}
+
+      - name: Checkout failure snapshot branch workspace
+        id: checkout_failure_snapshot
+        if: always() && steps.publication.outputs.publication_status == 'blocked'
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          path: .failure-snapshot-repo
+          fetch-depth: 0
+
+      - name: Push failure snapshot
+        id: push_failure_snapshot
+        if: always() && steps.publication.outputs.publication_status == 'blocked' && steps.build_failure_snapshot.outcome == 'success' && steps.checkout_failure_snapshot.outcome == 'success'
+        continue-on-error: true
+        run: |
+          python -m scripts.workflow.publish_failure_snapshot \
+            --checkout "$GITHUB_WORKSPACE/.failure-snapshot-repo" \
+            --source-snapshot "${{ steps.build_failure_snapshot.outputs.snapshot_directory }}" \
+            --branch "$FAILURE_SNAPSHOT_BRANCH" \
+            --report-date "${{ steps.date.outputs.date }}" \
+            --run-id "${{ github.run_id }}" \
+            --retention-days "$FAILURE_SNAPSHOT_RETENTION_DAYS" \
+            --max-scan-entries "$FAILURE_SNAPSHOT_MAX_SCAN_ENTRIES" \
+            --pipeline-exit-code "${{ steps.publication.outputs.pipeline_exit_code }}" \
+            --source-error-count "${{ steps.publication.outputs.source_error_count }}" \
+            --audit-error-count "${{ steps.publication.outputs.audit_error_count }}" \
+            --artifact-name "${{ steps.publication.outputs.artifact_name }}" \
+            --publication-blockers "${{ steps.publication.outputs.publication_blockers }}" \
+            --result-json "$RUNNER_TEMP/failure-snapshot-publish.json" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Prepare operational alert email
+        id: prepare_alert
+        if: always() && steps.publication.outputs.publication_status == 'blocked'
+        run: |
+          snapshot_directory="${{ steps.build_failure_snapshot.outputs.snapshot_directory }}"
+          snapshot_status="${{ steps.push_failure_snapshot.outputs.status }}"
+          python -m scripts.workflow.render_failure_alert \
+            --snapshot-directory "$snapshot_directory" \
+            --publication-json "$RUNNER_TEMP/publication.json" \
+            --run-summary-path "$GITHUB_WORKSPACE/${{ steps.publication.outputs.run_summary_path }}" \
+            --snapshot-push-status "${snapshot_status:-failed}" \
+            --output "$RUNNER_TEMP/notice_alert.html"
+          echo "alert_path=$RUNNER_TEMP/notice_alert.html" >> "$GITHUB_OUTPUT"
+
+      - name: Send operational alert email
+        if: always() && steps.publication.outputs.publication_status == 'blocked'
+        continue-on-error: true
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.MAIL_SERVER_ADDRESS }}
+          server_port: ${{ secrets.MAIL_SERVER_PORT }}
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: '上海大学通知推送运行异常 - ${{ steps.date.outputs.date }} - 源站异常 ${{ steps.publication.outputs.source_error_count }} 个 - 巡检异常 ${{ steps.publication.outputs.audit_error_count }} 个'
+          to: ${{ secrets.MAIL_TO }}
+          from: ${{ secrets.MAIL_USERNAME }}
+          html_body: file://${{ steps.prepare_alert.outputs.alert_path }}
+
+      - name: Fail blocked publication
+        if: always() && steps.publication.outputs.publication_status == 'blocked'
+        run: |
+          echo "::error::日报未发布；master 正式状态未更新。阻断原因: ${{ steps.publication.outputs.publication_blockers }}"
+          exit 1

@@ -11,6 +11,7 @@ from notice_push.settings.loader import load_config
 from notice_push.observability.doctor import has_doctor_errors, run_doctor
 from notice_push.domain import AppConfig, NoticeRuntimeProfile, PipelineRunOptions
 from notice_push.observability.run_summary import pipeline_counters
+from notice_push.observability.publication import PublicationFacts, decide_pipeline_publication
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -127,6 +128,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     pipeline = build_pipeline(config, profile)
     result = pipeline.run(run_options_from_args(args, profile))
     counters = pipeline_counters(result)
+    publication = decide_pipeline_publication(
+        PublicationFacts(
+            report_path=str(result.report_path or ""),
+            source_error_count=counters.source_error_count,
+            audit_error_count=counters.audit_error_count,
+        )
+    )
 
     print(f"new_count={counters.new_count}")
     print(f"updated_count={counters.updated_count}")
@@ -138,6 +146,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"audit_error_count={counters.audit_error_count}")
     print(f"audit_warning_count={counters.audit_warning_count}")
     print(f"refresh_seen_error_count={counters.refresh_seen_error_count}")
+    print(f"publication_eligibility={publication.status.value}")
+    print(f"publication_blockers={','.join(publication.blockers)}")
     if result.report_path:
         print(f"report_path={result.report_path}")
     if result.run_summary_path:
