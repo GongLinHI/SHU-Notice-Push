@@ -265,6 +265,7 @@ class PublicationManifest:
         outputs = {
             "publication_status": self.status.value,
             "publication_blockers": ",".join(self.blockers),
+            "master_state_updated": str(self.master_state_updated).lower(),
             "report_exists": str(self.report_exists).lower(),
             "report_path": self.report_path,
             "run_summary_path": self.run_summary_path,

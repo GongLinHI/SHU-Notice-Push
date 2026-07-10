@@ -98,6 +98,7 @@ def test_publication_manifest_exposes_stable_workflow_outputs():
     assert manifest.workflow_outputs() == {
         "publication_status": "blocked",
         "publication_blockers": "pipeline_exit_code=2",
+        "master_state_updated": "false",
         "report_exists": "false",
         "report_path": "",
         "run_summary_path": "",

@@ -76,6 +76,19 @@ def test_daily_report_workflow_recovers_when_initial_evaluation_fails():
     assert "python -m scripts.workflow.validate_publication_result" in workflow[final_index:]
 
 
+def test_daily_report_workflow_preserves_master_update_fact_during_finalizer_fallback():
+    workflow = Path(".github/workflows/daily_report.yml").read_text(encoding="utf-8")
+
+    final_index = workflow.index("- name: Finalize publication")
+    alert_index = workflow.index("- name: Send daily report email")
+    final_section = workflow[final_index:alert_index]
+    fail_section = workflow[workflow.index("- name: Fail blocked publication") :]
+
+    assert final_section.count('--master-state-updated "${MASTER_STATE_UPDATED:-false}"') == 2
+    assert "steps.publication.outputs.master_state_updated" in fail_section
+    assert "master 正式状态已更新，但后续发布收尾失败" in fail_section
+
+
 def test_daily_report_workflow_does_not_publish_master_when_html_render_fails():
     workflow = Path(".github/workflows/daily_report.yml").read_text(encoding="utf-8")
 

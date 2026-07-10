@@ -190,6 +190,34 @@ def test_alert_helper_falls_back_when_snapshot_and_summary_are_unavailable(monke
     assert "git push failed: remote rejected" in alert
 
 
+def test_alert_helper_reports_when_master_was_already_updated(monkeypatch, tmp_path):
+    publication_path = tmp_path / "publication.json"
+    publication = _blocked_manifest_payload()
+    publication["master_state_updated"] = True
+    publication_path.write_text(json.dumps(publication, ensure_ascii=False), encoding="utf-8")
+    alert_path = tmp_path / "alert.html"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "render_failure_alert",
+            "--snapshot-directory",
+            "",
+            "--publication-json",
+            str(publication_path),
+            "--snapshot-push-status",
+            "succeeded",
+            "--output",
+            str(alert_path),
+        ],
+    )
+
+    assert render_alert_main() == 0
+
+    alert = alert_path.read_text(encoding="utf-8")
+    assert "master 正式状态已更新" in alert
+    assert "master 正式状态未更新" not in alert
+
+
 def test_alert_helper_ignores_empty_snapshot_directory(monkeypatch, tmp_path):
     trusted_directory = tmp_path / "trusted"
     trusted_directory.mkdir()

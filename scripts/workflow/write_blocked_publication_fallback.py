@@ -36,7 +36,7 @@ def _manifest(args) -> dict[str, object]:
         "report_path": "",
         "report_exists": False,
         "run_summary_path": "",
-        "master_state_updated": False,
+        "master_state_updated": args.master_state_updated == "true",
         "report_email_sent": False,
         "alert_email_requested": True,
         "failure_snapshot_push_status": "pending",
@@ -53,6 +53,7 @@ def _write_outputs(path: Path, manifest: dict[str, object], *, prefix: str) -> N
     lines = {
         "publication_status": "blocked",
         "publication_blockers": ",".join(manifest["publication_blockers"]),
+        "master_state_updated": str(manifest["master_state_updated"]).lower(),
         "report_exists": "false",
         "report_path": "",
         "run_summary_path": "",
@@ -74,6 +75,7 @@ def main() -> int:
     parser.add_argument("--trigger", required=True)
     parser.add_argument("--git-sha", required=True)
     parser.add_argument("--blocker", required=True)
+    parser.add_argument("--master-state-updated", choices=("true", "false"), default="false")
     parser.add_argument("--failure-snapshot-branch", default="bot/failure-snapshots")
     parser.add_argument("--output-prefix", default="")
     parser.add_argument("--publication-json", type=Path, required=True)

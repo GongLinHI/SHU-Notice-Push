@@ -56,6 +56,54 @@ def test_finalize_publication_blocks_master_push_failure():
     assert manifest.failure_detail == "git push failed: remote rejected"
 
 
+def test_finalize_publication_accepts_github_success_outcome():
+    manifest = finalize_publication(
+        _candidate(),
+        render_html_status="success",
+        master_publish_status="succeeded",
+        master_state_updated=True,
+    )
+
+    assert manifest.status.value == "published"
+    assert manifest.blockers == ()
+    assert manifest.master_state_updated is True
+
+
+def test_finalize_publication_preserves_known_master_update_when_later_step_fails():
+    manifest = finalize_publication(
+        _candidate(),
+        render_html_status="success",
+        master_publish_status="failed",
+        master_state_updated=True,
+        master_publish_error="result serialization failed after push",
+    )
+
+    assert manifest.status.value == "blocked"
+    assert manifest.master_state_updated is True
+
+
+def test_finalize_publication_merges_known_master_update_into_blocked_candidate():
+    candidate = PublicationManifest.blocked_fallback(
+        report_date="2026-07-10",
+        run_id="123",
+        workflow_url="https://github.com/example/repo/actions/runs/123",
+        trigger="workflow_dispatch",
+        git_sha="abc",
+        pipeline_exit_code=2,
+        blocker="publication_evaluator_failed",
+    )
+
+    manifest = finalize_publication(
+        candidate,
+        render_html_status="success",
+        master_publish_status="succeeded",
+        master_state_updated=True,
+    )
+
+    assert manifest.status.value == "blocked"
+    assert manifest.master_state_updated is True
+
+
 def test_finalize_publication_preserves_no_report_without_master_change():
     candidate = PublicationManifest.from_decision(
         report_date="2026-07-10",
@@ -148,6 +196,41 @@ def test_fallback_cli_supports_initial_output_prefix(monkeypatch, tmp_path):
     output = github_output.read_text(encoding="utf-8")
     assert "initial_publication_status=blocked" in output
     assert "publication_status=blocked" not in output.splitlines()
+
+
+def test_fallback_cli_preserves_known_master_update(monkeypatch, tmp_path):
+    publication_path = tmp_path / "publication.json"
+    github_output = tmp_path / "github-output.txt"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "write_blocked_publication_fallback",
+            "--report-date",
+            "2026-07-10",
+            "--run-id",
+            "123",
+            "--workflow-url",
+            "https://github.com/example/repo/actions/runs/123",
+            "--trigger",
+            "workflow_dispatch",
+            "--git-sha",
+            "abc",
+            "--blocker",
+            "publication_finalizer_failed",
+            "--master-state-updated",
+            "true",
+            "--publication-json",
+            str(publication_path),
+            "--github-output",
+            str(github_output),
+        ],
+    )
+
+    assert fallback_main() == 0
+
+    manifest = PublicationManifest.from_json(__import__("json").loads(publication_path.read_text(encoding="utf-8")))
+    assert manifest.master_state_updated is True
+    assert "master_state_updated=true" in github_output.read_text(encoding="utf-8")
 
 
 def test_publication_result_validator_requires_matching_manifest_and_output(tmp_path):

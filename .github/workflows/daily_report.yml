@@ -183,6 +183,7 @@ jobs:
               --trigger "${{ github.event_name }}" \
               --git-sha "${{ github.sha }}" \
               --blocker publication_finalizer_failed \
+              --master-state-updated "${MASTER_STATE_UPDATED:-false}" \
               --failure-snapshot-branch "$FAILURE_SNAPSHOT_BRANCH" \
               --publication-json "$RUNNER_TEMP/publication.json" \
               --github-output "$GITHUB_OUTPUT"
@@ -321,5 +322,9 @@ jobs:
       - name: Fail blocked publication
         if: always() && steps.publication.outputs.publication_status == 'blocked'
         run: |
-          echo "::error::日报未发布；master 正式状态未更新。阻断原因: ${{ steps.publication.outputs.publication_blockers }}"
+          if [[ "${{ steps.publication.outputs.master_state_updated }}" == "true" ]]; then
+            echo "::error::master 正式状态已更新，但后续发布收尾失败。阻断原因: ${{ steps.publication.outputs.publication_blockers }}"
+          else
+            echo "::error::日报未发布；master 正式状态未更新。阻断原因: ${{ steps.publication.outputs.publication_blockers }}"
+          fi
           exit 1

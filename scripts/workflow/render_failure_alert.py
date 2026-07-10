@@ -25,13 +25,19 @@ def main() -> int:
         else {"source_errors": [], "audit_issues": []}
     )
     counts = publication.get("counts", {})
+    master_state_updated = publication.get("master_state_updated") is True
+    publication_message = (
+        "master 正式状态已更新，但后续发布收尾失败；日报邮件未发送"
+        if master_state_updated
+        else "日报未发布；master 正式状态未更新"
+    )
     items = [
         ("报告日期", publication.get("report_date", "")),
         ("Workflow Run ID", publication.get("workflow_run_id", "")),
         ("Workflow", publication.get("workflow_url", "")),
         ("触发方式", publication.get("trigger", "")),
         ("Git SHA", publication.get("git_sha", "")),
-        ("发布状态", "日报未发布；master 正式状态未更新"),
+        ("发布状态", publication_message),
         ("Pipeline 退出码", publication.get("pipeline_exit_code", 2)),
         ("阻断原因", ", ".join(publication.get("publication_blockers", [])) or "未知"),
         ("失败详情", publication.get("failure_detail", "") or "无"),
@@ -63,7 +69,7 @@ def main() -> int:
     body = (
         "<!doctype html><html><body style=\"font-family:Arial,sans-serif;line-height:1.6;color:#1f2937;\">"
         "<h2>上海大学通知推送运行异常</h2>"
-        "<p>本次日报未发布；master 正式状态未更新。</p>"
+        f"<p>{publication_message}。</p>"
         f"<ul>{details}</ul>{push_warning}"
         + (f"<h3>源站异常详情</h3><ul>{''.join(issue_rows)}</ul>" if issue_rows else "")
         + "</body></html>"

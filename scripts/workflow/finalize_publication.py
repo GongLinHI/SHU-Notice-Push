@@ -46,11 +46,19 @@ def finalize_publication(
     master_publish_error: str = "",
 ) -> PublicationManifest:
     if candidate.status is PublicationStatus.BLOCKED:
-        return candidate
-    if candidate.status is PublicationStatus.PUBLISHED and render_html_status != "succeeded":
-        return _block(candidate, "html_render_failed")
+        return replace(
+            candidate,
+            master_state_updated=candidate.master_state_updated or master_state_updated,
+        )
+    if candidate.status is PublicationStatus.PUBLISHED and render_html_status not in {"success", "succeeded"}:
+        return _block(candidate, "html_render_failed", master_state_updated=master_state_updated)
     if master_publish_status not in {"succeeded", "no_changes"}:
-        return _block(candidate, "master_publish_failed", failure_detail=master_publish_error)
+        return _block(
+            candidate,
+            "master_publish_failed",
+            master_state_updated=master_state_updated,
+            failure_detail=master_publish_error,
+        )
     return replace(candidate, master_state_updated=master_state_updated)
 
 
@@ -58,13 +66,14 @@ def _block(
     candidate: PublicationManifest,
     blocker: str,
     *,
+    master_state_updated: bool,
     failure_detail: str = "",
 ) -> PublicationManifest:
     return replace(
         candidate,
         status=PublicationStatus.BLOCKED,
         blockers=(blocker,),
-        master_state_updated=False,
+        master_state_updated=master_state_updated,
         report_email_sent=False,
         alert_email_requested=True,
         failure_snapshot_push_status="pending",
