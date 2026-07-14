@@ -30,6 +30,15 @@ def test_ci_doctor_uses_temporary_state_database():
     assert "python -m notice_push --doctor --state-path \"$RUNNER_TEMP/ci-state.sqlite3\"" in workflow
 
 
+def test_ci_skips_generated_daily_state_only_changes():
+    workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+
+    assert "resources/notice_state.sqlite3" in workflow
+    assert "resources/results/**" in workflow
+    assert "runs-on: ubuntu-24.04" in workflow
+    assert "python -m pip check" in workflow
+
+
 def test_ci_creates_pytest_basetemp_parent_directory():
     workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
 
@@ -162,7 +171,7 @@ def test_daily_report_workflow_isolates_blocked_runs_from_master_and_preserves_s
 
     assert "bot/failure-snapshots" in workflow
     assert "if: always() && steps.publication.outputs.publication_status == 'blocked'" in workflow
-    assert "notice-failure-snapshot-${{ steps.date.outputs.date }}-${{ github.run_id }}" in workflow
+    assert "notice-failure-snapshot-${{ steps.date.outputs.date }}-${{ env.NOTICE_RUN_KEY }}" in workflow
     assert "path: .failure-snapshot-repo" in workflow
     helper = Path("scripts/workflow/publish_failure_snapshot.py").read_text(encoding="utf-8")
     assert "python -m scripts.workflow.publish_failure_snapshot" in workflow
@@ -187,3 +196,14 @@ def test_daily_report_workflow_isolates_blocked_runs_from_master_and_preserves_s
     ]
     assert "sanitized-notice_pipeline.log" in upload_section
     assert "${{ runner.temp }}/notice_pipeline.log" not in upload_section
+
+
+def test_daily_report_reruns_use_unique_artifact_and_snapshot_keys():
+    workflow = Path(".github/workflows/daily_report.yml").read_text(encoding="utf-8")
+
+    assert 'NOTICE_RUN_KEY: "${{ github.run_id }}-attempt-${{ github.run_attempt }}"' in workflow
+    assert workflow.count('--run-id "$NOTICE_RUN_KEY"') == 6
+    assert "notice-state-before-run-${{ steps.date.outputs.date }}-${{ env.NOTICE_RUN_KEY }}" in workflow
+    assert "notice-run-summary-${{ steps.date.outputs.date }}-${{ env.NOTICE_RUN_KEY }}" in workflow
+    assert "runs-on: ubuntu-24.04" in workflow
+    assert "timeout-minutes: 60" in workflow

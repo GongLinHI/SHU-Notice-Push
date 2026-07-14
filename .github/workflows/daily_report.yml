@@ -17,10 +17,15 @@ env:
   FAILURE_SNAPSHOT_RETENTION_DAYS: "90"
   FAILURE_SNAPSHOT_MAX_SCAN_ENTRIES: "200"
   FAILURE_SNAPSHOT_ARTIFACT_RETENTION_DAYS: "30"
+  NOTICE_RUN_KEY: "${{ github.run_id }}-attempt-${{ github.run_attempt }}"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PIP_NO_INPUT: "1"
+  PYTHONUNBUFFERED: "1"
 
 jobs:
   generate-and-send:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     environment: Ubuntu-Python
 
     steps:
@@ -32,9 +37,10 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
+          cache-dependency-path: requirements.txt
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: python -m pip install -r requirements.txt
 
       - name: Get Beijing Time
         id: date
@@ -78,7 +84,7 @@ jobs:
             --raw-exit-code "${{ steps.run_python_script.outputs.raw_exit_code }}" \
             --workspace "$GITHUB_WORKSPACE" \
             --report-date "${{ steps.date.outputs.date }}" \
-            --run-id "${{ github.run_id }}" \
+            --run-id "$NOTICE_RUN_KEY" \
             --workflow-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             --trigger "${{ github.event_name }}" \
             --git-sha "${{ github.sha }}" \
@@ -87,7 +93,7 @@ jobs:
             --github-output "$GITHUB_OUTPUT"; then
             python -m scripts.workflow.write_blocked_publication_fallback \
               --report-date "${{ steps.date.outputs.date }}" \
-              --run-id "${{ github.run_id }}" \
+              --run-id "$NOTICE_RUN_KEY" \
               --workflow-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
               --trigger "${{ github.event_name }}" \
               --git-sha "${{ github.sha }}" \
@@ -102,7 +108,7 @@ jobs:
         if: always() && steps.backup_state.outputs.backup_exists == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: notice-state-before-run-${{ steps.date.outputs.date }}
+          name: notice-state-before-run-${{ steps.date.outputs.date }}-${{ env.NOTICE_RUN_KEY }}
           path: ${{ runner.temp }}/notice_state_before_run.sqlite3
           retention-days: 14
 
@@ -110,7 +116,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: notice-run-summary-${{ steps.date.outputs.date }}
+          name: notice-run-summary-${{ steps.date.outputs.date }}-${{ env.NOTICE_RUN_KEY }}
           path: resources/results/json/${{ steps.date.outputs.date }}.json
           if-no-files-found: ignore
           retention-days: 30
@@ -162,7 +168,7 @@ jobs:
             --candidate-publication-json "$RUNNER_TEMP/candidate-publication.json" \
             --publication-json "$RUNNER_TEMP/publication.json" \
             --report-date "${{ steps.date.outputs.date }}" \
-            --run-id "${{ github.run_id }}" \
+            --run-id "$NOTICE_RUN_KEY" \
             --workflow-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             --trigger "${{ github.event_name }}" \
             --git-sha "${{ github.sha }}" \
@@ -178,7 +184,7 @@ jobs:
               --github-output "$GITHUB_OUTPUT"; then
             python -m scripts.workflow.write_blocked_publication_fallback \
               --report-date "${{ steps.date.outputs.date }}" \
-              --run-id "${{ github.run_id }}" \
+              --run-id "$NOTICE_RUN_KEY" \
               --workflow-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
               --trigger "${{ github.event_name }}" \
               --git-sha "${{ github.sha }}" \
@@ -232,7 +238,7 @@ jobs:
           python -m scripts.workflow.build_failure_snapshot \
             --snapshot-root "$RUNNER_TEMP/failure-snapshot" \
             --report-date "${{ steps.date.outputs.date }}" \
-            --run-id "${{ github.run_id }}" \
+            --run-id "$NOTICE_RUN_KEY" \
             --pipeline-log "${{ steps.run_python_script.outputs.log_path }}" \
             --publication-json "$RUNNER_TEMP/publication.json" \
             --workspace "$GITHUB_WORKSPACE" \
@@ -252,7 +258,7 @@ jobs:
         if: always() && steps.publication.outputs.publication_status == 'blocked'
         uses: actions/upload-artifact@v4
         with:
-          name: notice-failure-snapshot-${{ steps.date.outputs.date }}-${{ github.run_id }}
+          name: notice-failure-snapshot-${{ steps.date.outputs.date }}-${{ env.NOTICE_RUN_KEY }}
           path: |
             ${{ runner.temp }}/failure-snapshot
             ${{ runner.temp }}/publication.json
@@ -279,7 +285,7 @@ jobs:
             --source-snapshot "${{ steps.build_failure_snapshot.outputs.snapshot_directory }}" \
             --branch "$FAILURE_SNAPSHOT_BRANCH" \
             --report-date "${{ steps.date.outputs.date }}" \
-            --run-id "${{ github.run_id }}" \
+            --run-id "$NOTICE_RUN_KEY" \
             --retention-days "$FAILURE_SNAPSHOT_RETENTION_DAYS" \
             --max-scan-entries "$FAILURE_SNAPSHOT_MAX_SCAN_ENTRIES" \
             --pipeline-exit-code "${{ steps.publication.outputs.pipeline_exit_code }}" \
