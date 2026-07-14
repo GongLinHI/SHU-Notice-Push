@@ -37,6 +37,8 @@ class NoticeRuntimeProfile:
     http_timeout: int
     http_max_retries: int
     http_initial_retry_delay: float
+    http_retry_backoff: float
+    http_max_retry_delay_seconds: int
     lookback_days: Optional[int]
     retry_failed: bool
     failed_retry_limit: int

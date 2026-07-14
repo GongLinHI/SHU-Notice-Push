@@ -2,9 +2,28 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+import yaml
+
+pytestmark = pytest.mark.usefixtures("seed_runtime_config_for_temporary_repo")
 
 from notice_push.settings.loader import load_config
 from notice_push.domain import AuditPolicy, MediaPolicy, NoticeListItem, NoticeRuntimeProfile, NoticeSource, ParsingConfig
+
+
+def _merge_runtime_config(root: Path, patch_text: str) -> None:
+    path = root / "resources" / "config" / "runtime.yml"
+    payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    patch = yaml.safe_load(patch_text)
+    _deep_merge(payload, patch)
+    path.write_text(yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+
+def _deep_merge(target: dict, patch: dict) -> None:
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            _deep_merge(target[key], value)
+        else:
+            target[key] = value
 
 
 def test_load_config_uses_defaults_and_repo_relative_paths(tmp_path):
@@ -51,6 +70,8 @@ def test_load_config_uses_defaults_and_repo_relative_paths(tmp_path):
         http_timeout=12,
         http_max_retries=2,
         http_initial_retry_delay=0.8,
+        http_retry_backoff=2.0,
+        http_max_retry_delay_seconds=30,
         lookback_days=365,
         retry_failed=True,
         failed_retry_limit=3,
@@ -72,6 +93,8 @@ def test_load_config_uses_defaults_and_repo_relative_paths(tmp_path):
         http_timeout=20,
         http_max_retries=3,
         http_initial_retry_delay=1.0,
+        http_retry_backoff=2.0,
+        http_max_retry_delay_seconds=30,
         lookback_days=365,
         retry_failed=True,
         failed_retry_limit=3,
@@ -120,8 +143,9 @@ def test_load_config_supports_path_and_model_env_override_only(tmp_path):
 
 def test_load_config_reads_profile_values_from_yaml_not_environment(tmp_path):
     config_dir = tmp_path / "resources" / "config"
-    config_dir.mkdir(parents=True)
-    (config_dir / "runtime.yml").write_text(
+    config_dir.mkdir(parents=True, exist_ok=True)
+    _merge_runtime_config(
+        tmp_path,
         "\n".join(
             [
                 "profiles:",
@@ -133,6 +157,8 @@ def test_load_config_reads_profile_values_from_yaml_not_environment(tmp_path):
                 "    http_timeout: 14",
                 "    http_max_retries: 4",
                 "    http_initial_retry_delay: 1.2",
+                "    http_retry_backoff: 2.2",
+                "    http_max_retry_delay_seconds: 22",
                 "    lookback_days: 120",
                 "    retry_failed: false",
                 "    failed_retry_limit: 9",
@@ -146,12 +172,14 @@ def test_load_config_reads_profile_values_from_yaml_not_environment(tmp_path):
                 "    llm_retry_backoff: 2.5",
                 "  backfill:",
                 "    max_pages_per_source: 25",
-                "    stop_after_seen_pages: 0",
+                "    stop_after_seen_pages:",
                 "    detail_max_workers: 7",
                 "    summary_max_workers: 8",
                 "    http_timeout: 30",
                 "    http_max_retries: 5",
                 "    http_initial_retry_delay: 1.5",
+                "    http_retry_backoff: 2.5",
+                "    http_max_retry_delay_seconds: 45",
                 "    lookback_days: 730",
                 "    retry_failed: true",
                 "    failed_retry_limit: 8",
@@ -165,7 +193,6 @@ def test_load_config_reads_profile_values_from_yaml_not_environment(tmp_path):
                 "    llm_retry_backoff: 3.0",
             ]
         ),
-        encoding="utf-8",
     )
     config = load_config(
         env={
@@ -184,6 +211,8 @@ def test_load_config_reads_profile_values_from_yaml_not_environment(tmp_path):
         http_timeout=14,
         http_max_retries=4,
         http_initial_retry_delay=1.2,
+        http_retry_backoff=2.2,
+        http_max_retry_delay_seconds=22,
         lookback_days=120,
         retry_failed=False,
         failed_retry_limit=9,
@@ -205,6 +234,8 @@ def test_load_config_reads_profile_values_from_yaml_not_environment(tmp_path):
         http_timeout=30,
         http_max_retries=5,
         http_initial_retry_delay=1.5,
+        http_retry_backoff=2.5,
+        http_max_retry_delay_seconds=45,
         lookback_days=730,
         retry_failed=True,
         failed_retry_limit=8,
@@ -221,8 +252,9 @@ def test_load_config_reads_profile_values_from_yaml_not_environment(tmp_path):
 
 def test_load_config_reads_llm_provider_values_from_yaml(tmp_path):
     config_dir = tmp_path / "resources" / "config"
-    config_dir.mkdir(parents=True)
-    (config_dir / "runtime.yml").write_text(
+    config_dir.mkdir(parents=True, exist_ok=True)
+    _merge_runtime_config(
+        tmp_path,
         "\n".join(
             [
                 "llm:",
@@ -246,7 +278,6 @@ def test_load_config_reads_llm_provider_values_from_yaml(tmp_path):
                 "  summary_format_repair_retries: 2",
             ]
         ),
-        encoding="utf-8",
     )
 
     config = load_config(
@@ -273,8 +304,9 @@ def test_load_config_reads_llm_provider_values_from_yaml(tmp_path):
 
 def test_load_config_reads_parsing_values_from_yaml(tmp_path):
     config_dir = tmp_path / "resources" / "config"
-    config_dir.mkdir(parents=True)
-    (config_dir / "runtime.yml").write_text(
+    config_dir.mkdir(parents=True, exist_ok=True)
+    _merge_runtime_config(
+        tmp_path,
         "\n".join(
             [
                 "parsing:",
@@ -285,7 +317,6 @@ def test_load_config_reads_parsing_values_from_yaml(tmp_path):
                 "    - spacer",
             ]
         ),
-        encoding="utf-8",
     )
 
     config = load_config(env={}, repo_root=tmp_path)
@@ -298,8 +329,9 @@ def test_load_config_reads_parsing_values_from_yaml(tmp_path):
 
 def test_load_config_reads_media_policy_from_yaml(tmp_path):
     config_dir = tmp_path / "resources" / "config"
-    config_dir.mkdir(parents=True)
-    (config_dir / "runtime.yml").write_text(
+    config_dir.mkdir(parents=True, exist_ok=True)
+    _merge_runtime_config(
+        tmp_path,
         "\n".join(
             [
                 "media:",
@@ -308,7 +340,6 @@ def test_load_config_reads_media_policy_from_yaml(tmp_path):
                 "  pdf_extracted_text_max_chars: 2048",
             ]
         ),
-        encoding="utf-8",
     )
 
     config = load_config(env={}, repo_root=tmp_path)
@@ -322,8 +353,9 @@ def test_load_config_reads_media_policy_from_yaml(tmp_path):
 
 def test_load_config_reads_audit_policy_from_yaml(tmp_path):
     config_dir = tmp_path / "resources" / "config"
-    config_dir.mkdir(parents=True)
-    (config_dir / "runtime.yml").write_text(
+    config_dir.mkdir(parents=True, exist_ok=True)
+    _merge_runtime_config(
+        tmp_path,
         "\n".join(
             [
                 "audit:",
@@ -334,7 +366,6 @@ def test_load_config_reads_audit_policy_from_yaml(tmp_path):
                 "    - pdf",
             ]
         ),
-        encoding="utf-8",
     )
 
     config = load_config(env={}, repo_root=tmp_path)
@@ -348,8 +379,9 @@ def test_load_config_reads_audit_policy_from_yaml(tmp_path):
 
 def test_load_config_rejects_routing_to_unknown_llm_provider(tmp_path):
     config_dir = tmp_path / "resources" / "config"
-    config_dir.mkdir(parents=True)
-    (config_dir / "runtime.yml").write_text(
+    config_dir.mkdir(parents=True, exist_ok=True)
+    _merge_runtime_config(
+        tmp_path,
         "\n".join(
             [
                 "llm:",
@@ -357,7 +389,6 @@ def test_load_config_rejects_routing_to_unknown_llm_provider(tmp_path):
                 "    text: missing_provider",
             ]
         ),
-        encoding="utf-8",
     )
 
     with pytest.raises(ValueError, match="unknown LLM provider"):
@@ -375,10 +406,10 @@ def test_load_config_loads_dotenv_from_repo_root(tmp_path, monkeypatch):
 
 def test_load_config_ignores_legacy_top_level_deepseek_model(tmp_path):
     config_dir = tmp_path / "resources" / "config"
-    config_dir.mkdir(parents=True)
-    (config_dir / "runtime.yml").write_text(
+    config_dir.mkdir(parents=True, exist_ok=True)
+    _merge_runtime_config(
+        tmp_path,
         "deepseek_model: legacy-deepseek-model\n",
-        encoding="utf-8",
     )
 
     config = load_config(env={}, repo_root=tmp_path)
@@ -389,8 +420,9 @@ def test_load_config_ignores_legacy_top_level_deepseek_model(tmp_path):
 
 def test_load_config_reads_runtime_values_from_yaml(tmp_path):
     config_dir = tmp_path / "resources" / "config"
-    config_dir.mkdir(parents=True)
-    (config_dir / "runtime.yml").write_text(
+    config_dir.mkdir(parents=True, exist_ok=True)
+    _merge_runtime_config(
+        tmp_path,
         "\n".join(
             [
                 "prompt_name: notice_summary_v3",
@@ -430,7 +462,6 @@ def test_load_config_reads_runtime_values_from_yaml(tmp_path):
                 "    llm_retry_backoff: 2.1",
             ]
         ),
-        encoding="utf-8",
     )
 
     config = load_config(

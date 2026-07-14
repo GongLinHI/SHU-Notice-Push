@@ -3,6 +3,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("seed_runtime_config_for_temporary_repo")
+
 from notice_push.app_factory import build_pipeline
 from notice_push.cli import main
 from notice_push.llm.kimi import KimiMultimodalSummarizer
@@ -22,8 +24,6 @@ class FakePipeline:
 
 
 def _write_doctor_repo_files(root: Path, prompt_text: str | None = None) -> None:
-    (root / "resources" / "config").mkdir(parents=True)
-    (root / "resources" / "config" / "runtime.yml").write_text("sources: {}\n", encoding="utf-8")
     (root / "resources" / "prompts").mkdir(parents=True)
     (root / "resources" / "prompts" / "notice_summary_v1.md").write_text(
         prompt_text

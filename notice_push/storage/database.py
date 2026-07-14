@@ -7,13 +7,11 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from notice_push.domain import NoticeDetail, NoticeListItem, NoticeSource, NoticeSummary, StorageHealth
+from notice_push.crawler.failures import is_retryable_failure_type
 from notice_push.storage.health import storage_health
 from notice_push.storage.notices import save_notice_detail, update_seen_notice_detail_if_changed
 from notice_push.storage.schema import initialize_schema
 from notice_push.storage.serialization import detail_from_row
-
-
-PERMANENT_FAILURE_TYPES = {"unsupported_video_content"}
 
 
 class NoticeStorage:
@@ -52,37 +50,6 @@ class NoticeStorage:
                         now,
                     ),
                 )
-
-    def filter_new_items(self, items: Iterable[NoticeListItem]) -> list[NoticeListItem]:
-        return self.filter_processable_items(items, retry_failed=False)
-
-    def filter_processable_items(
-        self,
-        items: Iterable[NoticeListItem],
-        *,
-        retry_failed: bool = False,
-        failed_retry_limit: int = 0,
-    ) -> list[NoticeListItem]:
-        new_items, retry_items = self.split_processable_items(
-            items,
-            retry_failed=retry_failed,
-            failed_retry_limit=failed_retry_limit,
-        )
-        return new_items + retry_items
-
-    def split_processable_items(
-        self,
-        items: Iterable[NoticeListItem],
-        *,
-        retry_failed: bool = False,
-        failed_retry_limit: int = 0,
-    ) -> tuple[list[NoticeListItem], list[NoticeListItem]]:
-        new_items, retry_items, _ = self.split_pipeline_items(
-            items,
-            retry_failed=retry_failed,
-            failed_retry_limit=failed_retry_limit,
-        )
-        return new_items, retry_items
 
     def split_pipeline_items(
         self,
@@ -349,7 +316,7 @@ def _dt(value: Optional[datetime]) -> Optional[str]:
 def _row_retryable(row: sqlite3.Row, retry_limit: int, now: str) -> bool:
     if row["status"] != "failed":
         return False
-    if row["failure_type"] in PERMANENT_FAILURE_TYPES:
+    if not is_retryable_failure_type(str(row["failure_type"] or "")):
         return False
     if retry_limit <= 0 or int(row["failure_count"] or 0) >= retry_limit:
         return False

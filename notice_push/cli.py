@@ -9,9 +9,10 @@ from typing import Optional
 from notice_push.app_factory import build_pipeline, run_source_audit
 from notice_push.settings.loader import load_config
 from notice_push.observability.doctor import has_doctor_errors, run_doctor
-from notice_push.domain import AppConfig, NoticeRuntimeProfile, PipelineRunOptions
+from notice_push.domain import NoticeRuntimeProfile, PipelineRunOptions
 from notice_push.observability.run_summary import pipeline_counters
 from notice_push.observability.publication import PublicationFacts, decide_pipeline_publication
+from notice_push.sources.selection import select_sources
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -39,19 +40,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--audit-only", action="store_true", help="Run source DOM audit only and exit.")
     parser.add_argument("--doctor", action="store_true", help="Check local configuration and state health.")
     return parser
-
-
-def select_sources(config: AppConfig, source_ids: Optional[tuple[str, ...]]):
-    if source_ids:
-        requested = set(source_ids)
-        selected = [source for source in config.sources if source.id in requested]
-        found = {source.id for source in selected}
-        missing = sorted(requested - found)
-        if missing:
-            available = ", ".join(source.id for source in config.sources)
-            raise ValueError(f"Unknown source id(s): {', '.join(missing)}. Available sources: {available}")
-        return selected
-    return [source for source in config.sources if source.enabled]
 
 
 def audit_counts(audit_results) -> tuple[int, int]:
@@ -109,16 +97,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                 print(f"doctor_warning={finding}")
         return 2 if has_doctor_errors(findings) else 0
 
-    if args.sources:
-        available_sources = {source.id for source in config.sources}
-        missing_sources = sorted(set(args.sources) - available_sources)
-        if missing_sources:
-            parser.error(
-                "unknown source id(s): "
-                + ", ".join(missing_sources)
-                + ". Available sources: "
-                + ", ".join(sorted(available_sources))
-            )
+    try:
+        select_sources(config.sources, args.sources)
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.audit_only:
         audit_results = run_source_audit(config, profile, tuple(args.sources or ()))
         print_audit_counts(audit_results)

@@ -3,9 +3,14 @@ import json
 import threading
 import time
 
+import pytest
+
+pytestmark = pytest.mark.usefixtures("seed_runtime_config_for_temporary_repo")
+
 from notice_push.settings.loader import load_config
 from notice_push.domain import NoticeAsset, NoticeDetail, NoticeListItem, NoticeSummary, PipelineRunOptions
 from notice_push.pipeline import NoticePipeline, create_adapter, is_summarizable_detail
+from notice_push.http_cache import CachedHttpClient
 from notice_push.storage import NoticeStorage
 
 
@@ -246,6 +251,41 @@ class DelayedHttp(FakeHttp):
 class FailingDetailAdapter(MultiItemAdapter):
     def parse_detail(self, html, item):
         raise RuntimeError(f"detail failed for {item.title}")
+
+
+def test_audit_and_pipeline_share_successful_list_and_detail_requests(tmp_path):
+    config = load_config(
+        env={},
+        repo_root=tmp_path,
+        state_path=tmp_path / "state.sqlite3",
+        output_dir=tmp_path / "results",
+    )
+    source = config.source_by_id("shu_official")
+    raw_http = FakeHttp(
+        {
+            source.list_url: "list-1",
+            "https://example.com/detail-1.htm": "detail",
+        }
+    )
+    pipeline = NoticePipeline(
+        config=config,
+        storage=NoticeStorage(config.state_path, config.sources),
+        http_client=CachedHttpClient(raw_http),
+        summarizer=FakeSummarizer(),
+        adapter_factory=lambda selected_source: FakeAdapter(selected_source),
+    )
+
+    run_pipeline(
+        pipeline,
+        source_ids=["shu_official"],
+        dry_run=True,
+        audit_sources=True,
+        max_pages_per_source=1,
+        report_date=date(2026, 7, 13),
+    )
+
+    assert raw_http.requested.count(source.list_url) == 1
+    assert raw_http.requested.count("https://example.com/detail-1.htm") == 1
 
 
 def test_pdf_detail_is_summarizable_even_when_text_is_short():
@@ -800,7 +840,7 @@ def test_pipeline_records_source_directory_failure_without_creating_report(tmp_p
 
 def test_pipeline_does_not_read_legacy_notice_records_csv(tmp_path):
     resources_dir = tmp_path / "resources"
-    resources_dir.mkdir()
+    resources_dir.mkdir(exist_ok=True)
     (resources_dir / "notice_records.csv").write_bytes(b"\xff")
     config = load_config(
         env={},

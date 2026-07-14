@@ -5,7 +5,7 @@ from dataclasses import replace
 from datetime import date
 from importlib import import_module
 from time import perf_counter
-from typing import Callable, Iterable, Optional
+from typing import Callable, Optional
 
 from notice_push.domain.config import AppConfig
 from notice_push.crawler.detail_fetcher import PreparedNotice, fetch_details_for_items, is_summarizable_detail
@@ -33,6 +33,7 @@ from notice_push.domain import (
 from notice_push.reporting.markdown import ReportEntry, render_report, write_report
 from notice_push.observability.run_summary import write_run_summary
 from notice_push.observability.source_audit import SourceAuditor
+from notice_push.sources.selection import select_sources
 from notice_push.storage import NoticeStorage
 
 
@@ -60,7 +61,7 @@ class NoticePipeline:
     ) -> PipelineResult:
         started_at = utc_now()
         started_perf = perf_counter()
-        selected_sources = self._select_sources(options.source_ids or None)
+        selected_sources = select_sources(self.config.sources, options.source_ids)
         max_pages = options.max_pages_per_source
         stop_after_seen = options.stop_after_seen_pages
         detail_worker_count = options.detail_max_workers
@@ -351,19 +352,6 @@ class NoticePipeline:
                     summary=outcome,
                 )
             )
-
-    def _select_sources(self, source_ids: Optional[Iterable[str]]) -> list[NoticeSource]:
-        if source_ids:
-            requested = set(source_ids)
-            selected = [source for source in self.config.sources if source.id in requested]
-            found = {source.id for source in selected}
-            missing = sorted(requested - found)
-            if missing:
-                available = ", ".join(source.id for source in self.config.sources)
-                raise ValueError(f"Unknown source id(s): {', '.join(missing)}. Available sources: {available}")
-            return selected
-        return [source for source in self.config.sources if source.enabled]
-
 
 def create_adapter(source: NoticeSource, detail_parser=None):
     adapter_path = source.adapter

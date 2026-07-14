@@ -1,77 +1,74 @@
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping
 
 from notice_push.domain import NoticeRuntimeProfile
-from notice_push.settings.defaults import (
-    BOOL_PROFILE_KEYS,
-    FLOAT_PROFILE_KEYS,
-    INT_PROFILE_KEYS,
-    OPTIONAL_INT_PROFILE_KEYS,
-    PROFILE_DEFAULTS,
+from notice_push.settings.validation import (
+    required_bool,
+    required_float,
+    required_int,
+    required_mapping,
+    required_optional_int,
 )
 
 
+REQUIRED_PROFILE_NAMES = ("daily", "backfill")
+OPTIONAL_INT_PROFILE_KEYS = ("max_pages_per_source", "stop_after_seen_pages", "lookback_days")
+INT_PROFILE_KEYS = (
+    "detail_max_workers",
+    "summary_max_workers",
+    "http_timeout",
+    "http_max_retries",
+    "http_max_retry_delay_seconds",
+    "failed_retry_limit",
+    "failed_retry_after_hours",
+    "refresh_seen_max_workers",
+    "refresh_seen_limit",
+    "llm_timeout",
+    "llm_max_retries",
+)
+FLOAT_PROFILE_KEYS = (
+    "http_initial_retry_delay",
+    "http_retry_backoff",
+    "llm_initial_retry_delay",
+    "llm_retry_backoff",
+)
+BOOL_PROFILE_KEYS = ("retry_failed", "refresh_seen_details")
+POSITIVE_INT_PROFILE_KEYS = {
+    "detail_max_workers",
+    "summary_max_workers",
+    "http_timeout",
+    "http_max_retry_delay_seconds",
+    "refresh_seen_max_workers",
+    "llm_timeout",
+    "llm_max_retries",
+}
+FLOAT_PROFILE_MINIMUMS = {
+    "http_initial_retry_delay": 0.0,
+    "http_retry_backoff": 1.0,
+    "llm_initial_retry_delay": 0.0,
+    "llm_retry_backoff": 1.0,
+}
+
+
 def runtime_profiles(yaml_config: Mapping[str, Any]) -> dict[str, NoticeRuntimeProfile]:
-    return {name: _runtime_profile(name, defaults, yaml_config) for name, defaults in PROFILE_DEFAULTS.items()}
+    configured_profiles = required_mapping(yaml_config, "profiles")
+    for name in REQUIRED_PROFILE_NAMES:
+        required_mapping(yaml_config, f"profiles.{name}")
+    return {name: _runtime_profile(name, yaml_config) for name in configured_profiles}
 
 
-def _runtime_profile(
-    name: str,
-    defaults: Mapping[str, Any],
-    yaml_config: Mapping[str, Any],
-) -> NoticeRuntimeProfile:
-    values = {key: _profile_value(yaml_config, name, key, default) for key, default in defaults.items()}
+def _runtime_profile(name: str, yaml_config: Mapping[str, Any]) -> NoticeRuntimeProfile:
+    field_path = ("profiles", name)
+    required_mapping(yaml_config, field_path)
+    values: dict[str, object] = {}
+    for key in OPTIONAL_INT_PROFILE_KEYS:
+        values[key] = required_optional_int(yaml_config, (*field_path, key), minimum=1)
+    for key in INT_PROFILE_KEYS:
+        minimum = 1 if key in POSITIVE_INT_PROFILE_KEYS else 0
+        values[key] = required_int(yaml_config, (*field_path, key), minimum=minimum)
+    for key in FLOAT_PROFILE_KEYS:
+        values[key] = required_float(yaml_config, (*field_path, key), minimum=FLOAT_PROFILE_MINIMUMS[key])
+    for key in BOOL_PROFILE_KEYS:
+        values[key] = required_bool(yaml_config, (*field_path, key))
     return NoticeRuntimeProfile(name=name, **values)
-
-
-def _profile_value(yaml_config: Mapping[str, Any], profile_name: str, key: str, default):
-    raw = _yaml_value(yaml_config, "profiles", profile_name, key, default=default)
-    if key in OPTIONAL_INT_PROFILE_KEYS:
-        return _optional_int_value(raw, default)
-    if key in INT_PROFILE_KEYS:
-        return _int_value(raw, int(default))
-    if key in FLOAT_PROFILE_KEYS:
-        return _float_value(raw, float(default))
-    if key in BOOL_PROFILE_KEYS:
-        return _bool_value(raw, bool(default))
-    return raw
-
-
-def _yaml_value(data: Mapping[str, Any], *path: str, default=None):
-    current: Any = data
-    for key in path:
-        if not isinstance(current, Mapping) or key not in current:
-            return default
-        current = current[key]
-    return current
-
-
-def _int_value(raw, default: int) -> int:
-    if raw is None or raw == "":
-        return default
-    return int(raw)
-
-
-def _optional_int_value(raw, default: Optional[int]) -> Optional[int]:
-    if raw is None or raw == "":
-        if default is None or default == "":
-            return None
-        value = int(default)
-        return None if value <= 0 else value
-    value = int(raw)
-    return None if value <= 0 else value
-
-
-def _float_value(raw, default: float) -> float:
-    if raw is None or raw == "":
-        return default
-    return float(raw)
-
-
-def _bool_value(raw, default: bool = True) -> bool:
-    if raw is None or raw == "":
-        return default
-    if isinstance(raw, bool):
-        return raw
-    return str(raw).strip().lower() not in {"0", "false", "no", "off"}

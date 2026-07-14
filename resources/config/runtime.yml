@@ -82,6 +82,8 @@ profiles:
     http_timeout: 12
     http_max_retries: 2
     http_initial_retry_delay: 0.8
+    http_retry_backoff: 2.0
+    http_max_retry_delay_seconds: 30
     llm_timeout: 60
     llm_max_retries: 3
     llm_initial_retry_delay: 1.0
@@ -101,6 +103,8 @@ profiles:
     http_timeout: 20
     http_max_retries: 3
     http_initial_retry_delay: 1.0
+    http_retry_backoff: 2.0
+    http_max_retry_delay_seconds: 30
     llm_timeout: 90
     llm_max_retries: 3
     llm_initial_retry_delay: 1.0

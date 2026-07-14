@@ -4,6 +4,7 @@ from notice_push.domain.config import AppConfig
 from notice_push.parsing.detail import DetailParser
 from notice_push.parsing.html import ParsingRules
 from notice_push.http import HttpClient
+from notice_push.http_cache import CachedHttpClient
 from notice_push.llm import resolve_optional_provider
 from notice_push.llm.kimi import KimiMultimodalSummarizer
 from notice_push.llm.router import SummarizerRouter
@@ -11,6 +12,7 @@ from notice_push.llm.text import NoticeSummarizer
 from notice_push.domain import NoticeRuntimeProfile
 from notice_push.pipeline import NoticePipeline, create_adapter
 from notice_push.observability.source_audit import SourceAuditor
+from notice_push.sources.selection import select_sources
 from notice_push.storage import NoticeStorage
 
 
@@ -28,13 +30,15 @@ def build_http_client(profile: NoticeRuntimeProfile) -> HttpClient:
         timeout=profile.http_timeout,
         max_retries=profile.http_max_retries,
         initial_retry_delay=profile.http_initial_retry_delay,
+        retry_backoff=profile.http_retry_backoff,
+        max_retry_delay_seconds=profile.http_max_retry_delay_seconds,
     )
 
 
 def build_pipeline(config: AppConfig, profile: NoticeRuntimeProfile) -> NoticePipeline:
     detail_parser = build_detail_parser(config)
     storage = NoticeStorage(config.state_path, config.sources)
-    http_client = build_http_client(profile)
+    http_client = CachedHttpClient(build_http_client(profile))
     provider_summarizers = {
         provider_id: _build_provider_summarizer(provider_id, config, profile, http_client)
         for provider_id in config.llm_providers
@@ -88,7 +92,7 @@ def _build_provider_summarizer(provider_id: str, config: AppConfig, profile: Not
 
 def run_source_audit(config: AppConfig, profile: NoticeRuntimeProfile, source_ids: tuple[str, ...]):
     detail_parser = build_detail_parser(config)
-    http_client = build_http_client(profile)
+    http_client = CachedHttpClient(build_http_client(profile))
     auditor = SourceAuditor(
         http_client=http_client,
         adapter_factory=lambda source: create_adapter(source, detail_parser=detail_parser),
@@ -96,11 +100,4 @@ def run_source_audit(config: AppConfig, profile: NoticeRuntimeProfile, source_id
         sample_detail_count=config.audit_policy.sample_detail_count,
         required_content_kinds=config.audit_policy.required_content_kinds,
     )
-    return auditor.audit_sources(_select_sources(config, source_ids or None))
-
-
-def _select_sources(config: AppConfig, source_ids: tuple[str, ...] | None):
-    if source_ids:
-        requested = set(source_ids)
-        return [source for source in config.sources if source.id in requested]
-    return [source for source in config.sources if source.enabled]
+    return auditor.audit_sources(select_sources(config.sources, source_ids))

@@ -1,4 +1,5 @@
 import pytest
+import requests
 import threading
 
 from notice_push.http import HttpClient
@@ -39,7 +40,7 @@ class _FlakySession:
     def get(self, url, **kwargs):
         self.calls += 1
         if self.calls == 1:
-            raise RuntimeError("temporary network error")
+            raise requests.ConnectionError("temporary network error")
         return self.response
 
 
@@ -49,7 +50,33 @@ class _AlwaysFailSession:
 
     def get(self, url, **kwargs):
         self.calls += 1
-        raise RuntimeError("network down")
+        raise requests.ConnectionError("network down")
+
+
+class _StreamingResponse(_FakeResponse):
+    def __init__(self, content: bytes, *, stream_error=None, headers=None):
+        super().__init__(content, headers=headers)
+        self.stream_error = stream_error
+        self.closed = False
+
+    def iter_content(self, chunk_size=8192):
+        if self.stream_error is not None:
+            raise self.stream_error
+        yield self.content
+
+    def close(self):
+        self.closed = True
+
+
+class _SequenceSession:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = 0
+
+    def get(self, url, **kwargs):
+        response = self.responses[self.calls]
+        self.calls += 1
+        return response
 
 
 def test_http_client_get_text_uses_timeout_headers_and_encoding():
@@ -103,7 +130,7 @@ def test_http_client_uses_exponential_backoff_between_retries(monkeypatch):
         retry_backoff=2.0,
     )
 
-    with pytest.raises(RuntimeError, match="network down"):
+    with pytest.raises(requests.ConnectionError, match="network down"):
         client.get_text("https://example.com")
 
     assert session.calls == 3
@@ -168,3 +195,24 @@ def test_http_client_get_download_limited_returns_content_type():
 
     assert downloaded.content == b"%PDF-1.7"
     assert downloaded.content_type == "application/pdf"
+
+
+def test_http_client_retries_stream_read_timeout_and_discards_partial_response():
+    timed_out = _StreamingResponse(
+        b"partial",
+        stream_error=requests.ReadTimeout("stream stalled"),
+        headers={"content-type": "application/pdf"},
+    )
+    success = _StreamingResponse(
+        b"%PDF-1.7",
+        headers={"content-type": "application/pdf"},
+    )
+    session = _SequenceSession([timed_out, success])
+    client = HttpClient(session=session, max_retries=2, initial_retry_delay=0)
+
+    downloaded = client.get_download_limited("https://example.com/file.pdf", max_bytes=1024)
+
+    assert downloaded.content == b"%PDF-1.7"
+    assert session.calls == 2
+    assert timed_out.closed is True
+    assert success.closed is True

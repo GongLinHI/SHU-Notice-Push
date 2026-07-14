@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
@@ -227,8 +226,7 @@ class KimiMultimodalSummarizer:
         if self._client is not None:
             return self._client
 
-        api_key = self.api_key or os.getenv("KIMI_API_KEY")
-        if not api_key:
-            raise ValueError("KIMI_API_KEY must be provided for real multimodal summarization")
-        self._client = OpenAI(api_key=api_key, base_url=self.base_url)
+        if not self.api_key:
+            raise ValueError("api_key must be provided for real multimodal summarization")
+        self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
         return self._client

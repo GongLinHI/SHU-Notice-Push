@@ -78,18 +78,17 @@ class NewSourceAdapter(NoticeSourceAdapter):
 fixture 放在：
 
 ```text
-tests/fixtures/source_pages/
+tests/fixtures/sources/<source_id>/
 ```
 
 命名约定：
 
 ```text
-<source_id>_list.html
-<source_id>_detail.html
-<source_id>_next_page.html
-<source_id>_pdf_detail.html
-<source_id>_image_detail.html
-<source_id>_video_detail.html
+list.html
+detail_text.html
+detail_pdf.html
+detail_image.html
+detail_video.html
 ```
 
 至少覆盖：

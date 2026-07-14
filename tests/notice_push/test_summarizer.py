@@ -441,8 +441,36 @@ def test_summarizer_requires_api_key_only_when_real_client_is_needed(tmp_path, m
         model="test-model",
     )
 
-    with pytest.raises(ValueError, match="DEEPSEEK_API_KEY"):
+    with pytest.raises(ValueError, match="api_key must be provided"):
         summarizer.summarize(1, make_detail())
+
+
+def test_text_summarizer_never_falls_back_to_hardcoded_provider_key(monkeypatch, tmp_path):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "must-not-be-used")
+    summarizer = NoticeSummarizer(
+        prompt_dir=tmp_path,
+        prompt_name="notice_summary_v1",
+        model="custom-model",
+        api_key="",
+        base_url="https://custom-llm.example/v1",
+    )
+
+    with pytest.raises(ValueError, match="api_key must be provided"):
+        summarizer._get_client()
+
+
+def test_kimi_summarizer_never_falls_back_to_hardcoded_provider_key(monkeypatch, tmp_path):
+    monkeypatch.setenv("KIMI_API_KEY", "must-not-be-used")
+    summarizer = KimiMultimodalSummarizer(
+        prompt_dir=tmp_path,
+        prompt_name="notice_summary_v1",
+        model="custom-model",
+        api_key="",
+        base_url="https://custom-llm.example/v1",
+    )
+
+    with pytest.raises(ValueError, match="api_key must be provided"):
+        summarizer._get_client()
 
 
 def test_summarizer_router_sends_text_details_to_text_summarizer(tmp_path):
