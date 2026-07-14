@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import argparse
 import html
-import json
 from pathlib import Path
+
+from notice_push.observability.publication_manifest import PublicationManifest
+from notice_push.observability.run_summary_contract import (
+    FailureRunSummaryContract,
+    RunSummaryContract,
+)
 
 
 def main() -> int:
@@ -18,32 +23,30 @@ def main() -> int:
     snapshot = _existing_snapshot_directory(args.snapshot_directory)
     publication_path = snapshot / "publication.json" if snapshot and (snapshot / "publication.json").exists() else args.publication_json
     summary_path = snapshot / "run_summary.json" if snapshot and (snapshot / "run_summary.json").exists() else args.run_summary_path
-    publication = json.loads(publication_path.read_text(encoding="utf-8"))
-    summary = (
-        json.loads(summary_path.read_text(encoding="utf-8"))
-        if summary_path and summary_path.is_file()
-        else {"source_errors": [], "audit_issues": []}
+    publication = PublicationManifest.from_json_text(
+        publication_path.read_text(encoding="utf-8")
     )
-    counts = publication.get("counts", {})
-    master_state_updated = publication.get("master_state_updated") is True
+    issues = _load_summary_issues(summary_path)
+    counts = publication.counts
+    master_state_updated = publication.master_state_updated
     publication_message = (
         "master 正式状态已更新，但后续发布收尾失败；日报邮件未发送"
         if master_state_updated
         else "日报未发布；master 正式状态未更新"
     )
     items = [
-        ("报告日期", publication.get("report_date", "")),
-        ("Workflow Run ID", publication.get("workflow_run_id", "")),
-        ("Workflow", publication.get("workflow_url", "")),
-        ("触发方式", publication.get("trigger", "")),
-        ("Git SHA", publication.get("git_sha", "")),
+        ("报告日期", publication.report_date),
+        ("Workflow Run ID", publication.workflow_run_id),
+        ("Workflow", publication.workflow_url),
+        ("触发方式", publication.trigger),
+        ("Git SHA", publication.git_sha),
         ("发布状态", publication_message),
-        ("Pipeline 退出码", publication.get("pipeline_exit_code", 2)),
-        ("阻断原因", ", ".join(publication.get("publication_blockers", [])) or "未知"),
-        ("失败详情", publication.get("failure_detail", "") or "无"),
-        ("异常快照分支", publication.get("failure_snapshot_branch", "")),
-        ("异常快照路径", publication.get("failure_snapshot_path", "")),
-        ("Artifact", publication.get("artifact_name", "")),
+        ("Pipeline 退出码", publication.pipeline_exit_code),
+        ("阻断原因", ", ".join(publication.blockers) or "未知"),
+        ("失败详情", publication.failure_detail or "无"),
+        ("异常快照分支", publication.failure_snapshot_branch),
+        ("异常快照路径", publication.failure_snapshot_path),
+        ("Artifact", publication.artifact_name),
         ("快照推送状态", args.snapshot_push_status),
     ]
     for key in (
@@ -54,14 +57,14 @@ def main() -> int:
         "failed_count",
         "manual_review_count",
     ):
-        items.append((key, counts.get(key, 0)))
+        items.append((key, getattr(counts, key)))
     issue_rows = []
-    for issue in [*summary.get("source_errors", []), *summary.get("audit_issues", [])]:
+    for issue in issues:
         issue_rows.append(
             "<li><strong>{}</strong>: {} ({})</li>".format(
-                html.escape(str(issue.get("source_name", issue.get("source_id", "")))),
-                html.escape(str(issue.get("reason", ""))),
-                html.escape(str(issue.get("url", ""))),
+                html.escape(issue.source_name or issue.source_id),
+                html.escape(issue.reason),
+                html.escape(issue.url),
             )
         )
     details = "".join(f"<li>{html.escape(str(key))}: {html.escape(str(value))}</li>" for key, value in items)
@@ -76,6 +79,21 @@ def main() -> int:
     )
     args.output.write_text(body, encoding="utf-8")
     return 0
+
+
+def _load_summary_issues(summary_path: Path | None):
+    if summary_path is None or not summary_path.is_file():
+        return ()
+    text = summary_path.read_text(encoding="utf-8")
+    try:
+        summary = RunSummaryContract.from_json_text(text)
+    except ValueError:
+        try:
+            FailureRunSummaryContract.from_json_text(text)
+        except ValueError:
+            return ()
+        return ()
+    return (*summary.source_errors, *summary.audit_issues)
 
 
 def _existing_snapshot_directory(raw_path: str) -> Path | None:

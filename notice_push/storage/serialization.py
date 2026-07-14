@@ -4,31 +4,51 @@ import hashlib
 import json
 from datetime import datetime
 
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+
 from notice_push.domain import Attachment, NoticeAsset, NoticeDetail
 
 
+class _AttachmentRecord(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    name: str = ""
+    url: str = ""
+
+
+class _AssetRecord(_AttachmentRecord):
+    kind: str = ""
+    role: str = ""
+    mime_type: str = ""
+
+
+_ATTACHMENTS_ADAPTER = TypeAdapter(list[_AttachmentRecord])
+_ASSETS_ADAPTER = TypeAdapter(list[_AssetRecord])
+
+
 def attachments_json(detail: NoticeDetail) -> str:
-    return json.dumps(
-        [{"name": item.name, "url": item.url} for item in detail.attachments],
-        ensure_ascii=False,
-        sort_keys=True,
+    records = [
+        _AttachmentRecord(name=item.name, url=item.url)
+        for item in detail.attachments
+    ]
+    return _canonical_json(
+        [record.model_dump(mode="json") for record in records]
     )
 
 
 def assets_json(detail: NoticeDetail) -> str:
-    return json.dumps(
-        [
-            {
-                "kind": item.kind,
-                "role": item.role,
-                "name": item.name,
-                "url": item.url,
-                "mime_type": item.mime_type,
-            }
-            for item in detail.assets
-        ],
-        ensure_ascii=False,
-        sort_keys=True,
+    records = [
+        _AssetRecord(
+            kind=item.kind,
+            role=item.role,
+            name=item.name,
+            url=item.url,
+            mime_type=item.mime_type,
+        )
+        for item in detail.assets
+    ]
+    return _canonical_json(
+        [record.model_dump(mode="json") for record in records]
     )
 
 
@@ -43,18 +63,18 @@ def content_hash(detail: NoticeDetail) -> str:
 
 def detail_from_row(row) -> NoticeDetail:
     attachments = tuple(
-        Attachment(name=str(item.get("name", "")), url=str(item.get("url", "")))
-        for item in _loads_list(row["attachments_json"])
+        Attachment(name=item.name, url=item.url)
+        for item in _load_records(row["attachments_json"], _ATTACHMENTS_ADAPTER)
     )
     assets = tuple(
         NoticeAsset(
-            kind=str(item.get("kind", "")),
-            role=str(item.get("role", "")),
-            name=str(item.get("name", "")),
-            url=str(item.get("url", "")),
-            mime_type=str(item.get("mime_type", "")),
+            kind=item.kind,
+            role=item.role,
+            name=item.name,
+            url=item.url,
+            mime_type=item.mime_type,
         )
-        for item in _loads_list(row["assets_json"])
+        for item in _load_records(row["assets_json"], _ASSETS_ADAPTER)
     )
     return NoticeDetail(
         source_id=row["source_id"],
@@ -70,12 +90,16 @@ def detail_from_row(row) -> NoticeDetail:
     )
 
 
-def _loads_list(raw: str) -> list[dict]:
+def _load_records(raw: str, adapter: TypeAdapter):
     try:
-        loaded = json.loads(raw or "[]")
-    except json.JSONDecodeError:
+        return adapter.validate_json(raw or "[]")
+    except ValidationError:
         return []
-    return loaded if isinstance(loaded, list) else []
+
+
+def _canonical_json(payload: list[dict[str, object]]) -> str:
+    # This byte representation participates in content_hash; keep key ordering stable.
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 
 def _parse_datetime(raw: str | None) -> datetime | None:

@@ -24,6 +24,12 @@ VALID_SUMMARY = "\n".join(
     ]
 )
 
+TEST_MEDIA_POLICY = MediaPolicy(
+    pdf_max_bytes=20 * 1024 * 1024,
+    image_max_bytes=8 * 1024 * 1024,
+    pdf_extracted_text_max_chars=50_000,
+)
+
 
 class _FakeMessage:
     def __init__(self, content: str = VALID_SUMMARY):
@@ -459,12 +465,25 @@ def test_text_summarizer_never_falls_back_to_hardcoded_provider_key(monkeypatch,
         summarizer._get_client()
 
 
+def test_text_summarizer_requires_configured_base_url_for_real_client(tmp_path):
+    summarizer = NoticeSummarizer(
+        prompt_dir=tmp_path,
+        prompt_name="notice_summary_v1",
+        model="custom-model",
+        api_key="test-key",
+    )
+
+    with pytest.raises(ValueError, match="base_url must be provided"):
+        summarizer._get_client()
+
+
 def test_kimi_summarizer_never_falls_back_to_hardcoded_provider_key(monkeypatch, tmp_path):
     monkeypatch.setenv("KIMI_API_KEY", "must-not-be-used")
     summarizer = KimiMultimodalSummarizer(
         prompt_dir=tmp_path,
         prompt_name="notice_summary_v1",
         model="custom-model",
+        media_policy=TEST_MEDIA_POLICY,
         api_key="",
         base_url="https://custom-llm.example/v1",
     )
@@ -489,6 +508,7 @@ def test_summarizer_router_sends_text_details_to_text_summarizer(tmp_path):
             prompt_dir=prompt_dir,
             prompt_name="notice_summary_v1",
             model="kimi-test",
+            media_policy=TEST_MEDIA_POLICY,
             client=kimi_client,
             downloader=lambda asset: tmp_path / "unused.bin",
     )
@@ -515,6 +535,7 @@ def test_kimi_pdf_summarizer_extracts_file_content_before_chat(tmp_path):
         prompt_dir=prompt_dir,
         prompt_name="notice_summary_v1",
         model="kimi-k2.7-code",
+        media_policy=TEST_MEDIA_POLICY,
         client=fake_client,
         downloader=lambda asset: pdf_path,
     )
@@ -549,7 +570,11 @@ def test_kimi_pdf_summarizer_limits_extracted_text_before_chat(tmp_path):
         model="kimi-k2.7-code",
         client=fake_client,
         downloader=lambda asset: pdf_path,
-        media_policy=MediaPolicy(pdf_extracted_text_max_chars=4),
+        media_policy=MediaPolicy(
+            pdf_max_bytes=TEST_MEDIA_POLICY.pdf_max_bytes,
+            image_max_bytes=TEST_MEDIA_POLICY.image_max_bytes,
+            pdf_extracted_text_max_chars=4,
+        ),
     )
 
     summarizer.summarize(8, make_pdf_detail(), source_name="上海大学管理学院")
@@ -574,6 +599,7 @@ def test_kimi_pdf_summarizer_retries_file_upload_with_exponential_backoff(tmp_pa
         prompt_dir=prompt_dir,
         prompt_name="notice_summary_v1",
         model="kimi-k2.7-code",
+        media_policy=TEST_MEDIA_POLICY,
         client=fake_client,
         downloader=lambda asset: pdf_path,
         timeout=45,
@@ -604,6 +630,7 @@ def test_kimi_pdf_summarizer_retries_file_content_with_exponential_backoff(tmp_p
         prompt_dir=prompt_dir,
         prompt_name="notice_summary_v1",
         model="kimi-k2.7-code",
+        media_policy=TEST_MEDIA_POLICY,
         client=fake_client,
         downloader=lambda asset: pdf_path,
         timeout=45,
@@ -637,6 +664,7 @@ def test_kimi_pdf_summarizer_cleans_downloaded_temp_file_when_upload_fails(tmp_p
         prompt_dir=prompt_dir,
         prompt_name="notice_summary_v1",
         model="kimi-k2.7-code",
+        media_policy=TEST_MEDIA_POLICY,
         client=fake_client,
         http_client=_DownloadHttpClient(b"%PDF-1.4 fake", "application/pdf"),
         max_retries=1,
@@ -660,6 +688,7 @@ def test_kimi_image_summarizer_sends_openai_compatible_image_message(tmp_path):
         prompt_dir=prompt_dir,
         prompt_name="notice_summary_v1",
         model="kimi-k2.7-code",
+        media_policy=TEST_MEDIA_POLICY,
         client=fake_client,
         downloader=lambda asset: image_path,
     )

@@ -20,7 +20,7 @@ def resolve_optional_provider(
     config: LLMProviderConfig,
     env: dict[str, str] | None = None,
 ) -> ResolvedLLMProvider:
-    active_env = env or os.environ
+    active_env = os.environ if env is None else env
     return ResolvedLLMProvider(
         name=name,
         base_url=config.base_url,

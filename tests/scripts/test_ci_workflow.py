@@ -1,5 +1,20 @@
 from pathlib import Path
 
+import yaml
+
+
+def _daily_steps():
+    workflow = yaml.safe_load(Path(".github/workflows/daily_report.yml").read_text(encoding="utf-8"))
+    return workflow["jobs"]["generate-and-send"]["steps"]
+
+
+def _logical_shell_line_count(script: str) -> int:
+    return sum(
+        1
+        for raw_line in script.splitlines()
+        if (line := raw_line.strip()) and not line.startswith("#") and not line.endswith("\\")
+    )
+
 
 def test_ci_workflow_avoids_external_actionlint_invocation():
     workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
@@ -19,7 +34,8 @@ def test_ci_creates_pytest_basetemp_parent_directory():
     workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
 
     assert "mkdir -p .tmp" in workflow
-    assert workflow.index("mkdir -p .tmp") < workflow.index("pytest tests/notice_push/test_cli.py")
+    assert workflow.index("mkdir -p .tmp") < workflow.index("pytest -q")
+    assert workflow.count("pytest -q") == 1
 
 
 def test_daily_report_workflow_captures_updated_count():
@@ -108,6 +124,37 @@ def test_daily_report_workflow_distinguishes_email_failure_after_master_publish(
     assert "id: send_report_email" in workflow
     assert "steps.send_report_email.outcome == 'failure'" in workflow
     assert "正式数据已发布到 master，但日报邮件投递失败" in workflow
+
+
+def test_daily_report_workflow_limits_business_shell_blocks():
+    run_steps = [step for step in _daily_steps() if isinstance(step.get("run"), str)]
+
+    oversized = {
+        step.get("name", "unnamed"): _logical_shell_line_count(step["run"])
+        for step in run_steps
+        if _logical_shell_line_count(step["run"]) > 30
+    }
+
+    assert oversized == {}
+
+
+def test_daily_report_git_publication_only_uses_python_helpers():
+    workflow = Path(".github/workflows/daily_report.yml").read_text(encoding="utf-8")
+
+    assert "git push" not in workflow
+    assert "git commit" not in workflow
+    assert "git add" not in workflow
+    assert "python -m scripts.workflow.publish_master" in workflow
+    assert "python -m scripts.workflow.publish_failure_snapshot" in workflow
+
+
+def test_blocked_workflow_paths_only_use_final_publication_outputs():
+    workflow = Path(".github/workflows/daily_report.yml").read_text(encoding="utf-8")
+    blocked_section = workflow[workflow.index("- name: Sanitize failure pipeline log") :]
+
+    assert "steps.initial_publication.outputs" not in blocked_section
+    assert "steps.publication.outputs.publication_status" in blocked_section
+    assert "steps.publication.outputs.publication_blockers" in blocked_section
 
 
 def test_daily_report_workflow_isolates_blocked_runs_from_master_and_preserves_snapshots():

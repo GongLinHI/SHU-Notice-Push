@@ -70,7 +70,7 @@ def test_build_failure_snapshot_redacts_log_creates_fallback_and_copies_sqlite(t
         assert connection.execute("select title from notices").fetchone()[0] == "测试通知"
 
 
-def test_build_failure_snapshot_preserves_existing_summary_and_handles_missing_state(tmp_path):
+def test_build_failure_snapshot_replaces_non_contract_summary_and_handles_missing_state(tmp_path):
     run_summary_path = tmp_path / "summary.json"
     run_summary_path.write_text(
         '{"schema_version": 2, "existing": true, "error": "secret-value"}\n',
@@ -86,8 +86,8 @@ def test_build_failure_snapshot_preserves_existing_summary_and_handles_missing_s
     )
 
     summary = json.loads((snapshot_path / "run_summary.json").read_text(encoding="utf-8"))
-    assert summary["existing"] is True
-    assert summary["error"] == "***"
+    assert summary["fallback"] is True
+    assert "secret-value" not in (snapshot_path / "run_summary.json").read_text(encoding="utf-8")
     assert not (snapshot_path / "notice_state.sqlite3").exists()
     manifest = json.loads((snapshot_path / "publication.json").read_text(encoding="utf-8"))
     assert manifest["state_snapshot_available"] is False

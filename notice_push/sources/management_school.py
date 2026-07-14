@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from bs4 import BeautifulSoup
 
-from notice_push.parsing.html import clean_text, parse_date
+from notice_push.parsing.content import clean_text
+from notice_push.parsing.dates import parse_date
 from notice_push.domain import NoticeDetail, NoticeListItem
 from notice_push.sources.base import NoticeSourceAdapter
 

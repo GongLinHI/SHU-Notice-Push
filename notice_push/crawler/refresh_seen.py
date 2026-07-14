@@ -12,7 +12,7 @@ def update_seen_details_if_changed(
     source: NoticeSource,
     adapter,
     items: list[NoticeListItem],
-    seen_rows: dict[str, object],
+    seen_rows: dict[tuple[str, str], object],
     http_client,
     storage,
     detail_min_chars: int,
@@ -29,7 +29,7 @@ def update_seen_details_if_changed(
             detail = adapter.parse_detail(detail_html, item)
             if not is_summarizable_detail(detail, detail_min_chars):
                 return None, None
-            notice_id = int(seen_rows[item.canonical_url]["id"])
+            notice_id = int(seen_rows[(item.source_id, item.canonical_url)]["id"])
             changed = storage.update_seen_detail_if_changed(notice_id, detail)
             if changed:
                 return PreparedNotice(source=source, notice_id=notice_id, detail=detail), None

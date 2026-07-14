@@ -64,12 +64,12 @@ class LLMProviderConfig:
 
 @dataclass(frozen=True)
 class ParsingConfig:
-    external_video_domains: tuple[str, ...] = ("kankanews.com",)
-    noise_image_markers: tuple[str, ...] = ("logo", "icon", "wx", "weixin", "qr", "blank", "spacer")
+    external_video_domains: tuple[str, ...]
+    noise_image_markers: tuple[str, ...]
 
 
 @dataclass(frozen=True)
 class MediaPolicy:
-    pdf_max_bytes: int = 20971520
-    image_max_bytes: int = 8388608
-    pdf_extracted_text_max_chars: int = 50000
+    pdf_max_bytes: int
+    image_max_bytes: int
+    pdf_extracted_text_max_chars: int

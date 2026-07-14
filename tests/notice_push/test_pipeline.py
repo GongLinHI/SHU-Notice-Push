@@ -9,7 +9,8 @@ pytestmark = pytest.mark.usefixtures("seed_runtime_config_for_temporary_repo")
 
 from notice_push.settings.loader import load_config
 from notice_push.domain import NoticeAsset, NoticeDetail, NoticeListItem, NoticeSummary, PipelineRunOptions
-from notice_push.pipeline import NoticePipeline, create_adapter, is_summarizable_detail
+from notice_push.crawler.detail_fetcher import is_summarizable_detail
+from notice_push.pipeline import NoticePipeline, create_adapter
 from notice_push.http_cache import CachedHttpClient
 from notice_push.storage import NoticeStorage
 

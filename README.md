@@ -12,6 +12,7 @@
 - **双运行档位**：`daily` 用于日常增量运行，`backfill` 用于补历史或漏跑场景。
 - **可配置并发与重试**：详情抓取、LLM 摘要、HTTP 超时、失败重试都集中在 YAML 中管理。
 - **运行异常告警**：源站访问异常会单独发送运行告警邮件，不混入每日通知日报。
+- **严格发布与现场保留**：异常运行不会发布不完整日报，诊断现场会保存为 Artifact，并尝试写入隔离分支 `bot/failure-snapshots`。
 
 ## 通知源
 
@@ -76,11 +77,20 @@ environment: Ubuntu-Python
 1. 执行 `python -m notice_push --profile daily`。
 2. 如果发现新通知或需要人工复核的失败通知，生成 `resources/results/YYYY-MM-DD.md`。
 3. 使用 `pandoc` 和 [resources/templates/daily_report.html](resources/templates/daily_report.html) 渲染 HTML 邮件。
-4. 发送每日通知邮件。
-5. 如果源站访问异常或 pipeline 异常，发送单独的运行异常告警邮件。
-6. 提交更新后的 SQLite 状态库和 Markdown 日报。
+4. 先提交并推送更新后的 SQLite 状态库和 Markdown 日报，再完成最终发布判定。
+5. 只有远程正式状态更新成功后才发送每日通知邮件。
+6. 如果源站访问异常或 pipeline、渲染、Git 发布异常，保存诊断现场并发送单独的运行异常告警邮件。
 
 没有新通知且没有需要人工复核的失败通知时，通常不会发送每日通知邮件；源站异常只会进入运行异常告警。
+
+正式发布采用严格模式：只有 `published` 和 `no_report` 状态可以更新 `master`。`blocked` 状态不会发送日报邮件，会上传诊断 Artifact、尝试推送异常快照，并最终让 workflow 以失败状态结束。若 `master` 已成功更新但后续收尾失败，告警会明确保留 `master_state_updated=true` 这一事实。
+
+Artifact 默认保留时间：
+
+- 运行前 SQLite 备份：14 天。
+- run summary JSON：30 天。
+- 异常快照 Artifact：30 天。
+- `bot/failure-snapshots` 分支中的异常目录：保留 90 天，由后续异常运行按扫描上限清理。
 
 ## 配置
 
@@ -131,7 +141,7 @@ llm:
 
 用于补历史或漏跑：
 
-- 不设置固定页数上限，但仍受 `lookback_days: 365` 约束。
+- 每个来源最多扫描 80 页，同时受 `lookback_days: 365` 约束。
 - 详情抓取并发为 4，摘要并发为 3。
 - 会刷新部分已见通知详情，适合修复早期状态或补充详情内容。
 
@@ -226,10 +236,15 @@ conda run --no-capture-output -n spider python -m notice_push --profile daily --
 - SQLite 状态库：`resources/notice_state.sqlite3`
 - Markdown 日报：`resources/results/YYYY-MM-DD.md`
 - GitHub Actions 渲染的 HTML：`resources/results/html/YYYY-MM-DD.html`
+- 类型化运行摘要：`resources/results/json/YYYY-MM-DD.json`
+
+正常链路中的 `publication.json`、run summary 和发布结果 JSON 使用 Pydantic 合同校验，未知字段和错误类型会被拒绝。最终器失效时的最小 blocked fallback 刻意只依赖 Python 标准库，恢复后仍须通过同一 Pydantic 合同校验。SQLite 中的附件与媒体 JSON 保持稳定排序，以避免改变既有 `content_hash`。
 
 ## 添加新通知源
 
 详细步骤见 [docs/add-source-guide.md](docs/add-source-guide.md)。
+
+整体模块边界和新增 LLM provider 的路径见 [docs/architecture.md](docs/architecture.md)。
 
 通常需要：
 
@@ -264,14 +279,14 @@ conda run --no-capture-output -n spider python scripts/clean_empty_results.py
 notice_push/
   cli.py              CLI 参数解析和命令分发
   app_factory.py      HTTP、Storage、LLM、Pipeline 装配
-  settings/           YAML 配置加载和 profile 默认值
+  settings/           YAML 配置加载、严格校验和 profile 构造
   domain/             Notice、Result、Runtime dataclass
   crawler/            目录扫描、详情抓取、失败分类、已见通知刷新
-  storage/            SQLite schema、序列化、健康检查
-  llm/                DeepSeek/Kimi 摘要、路由、提示词修复
-  parsing/            HTML 正文、附件、PDF/image/video 解析
+  storage/            SQLite 门面、批量选择与来源/通知仓库
+  llm/                provider registry、客户端/提示词生命周期与摘要路由
+  parsing/            正文、资源、PDFJS、日期和 URL 独立解析模块
   reporting/          Markdown 日报和资源链接
-  observability/      doctor、source audit、run summary
+  observability/      doctor、source audit、发布决策与 JSON 合同
   sources/            三个通知源 Adapter
 
 resources/

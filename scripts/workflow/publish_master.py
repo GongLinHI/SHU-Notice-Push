@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, StrictBool, StrictStr
 
 from notice_push.observability.publication import PublicationStatus
 from notice_push.observability.publication_manifest import PublicationCounts, PublicationManifest
@@ -27,20 +28,13 @@ class PublishMasterRequest:
     counts: PublicationCounts
 
 
-@dataclass(frozen=True)
-class PublishMasterResult:
-    status: PublishStatus
-    master_state_updated: bool
-    error: str = ""
-    commit_subject: str = ""
+class PublishMasterResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
-    def to_json(self) -> dict[str, object]:
-        return {
-            "status": self.status,
-            "master_state_updated": self.master_state_updated,
-            "error": self.error,
-            "commit_subject": self.commit_subject,
-        }
+    status: PublishStatus
+    master_state_updated: StrictBool
+    error: StrictStr = ""
+    commit_subject: StrictStr = ""
 
 
 def publish_master(request: PublishMasterRequest) -> PublishMasterResult:
@@ -155,6 +149,11 @@ def _write_github_output(path: Path | None, result: PublishMasterResult) -> None
         stream.write(f"error={result.error}\n")
 
 
+def _write_result_json(path: Path, result: PublishMasterResult) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(result.model_dump_json(indent=2) + "\n", encoding="utf-8")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Commit and push formal notice state to master.")
     parser.add_argument("--repository", type=Path, required=True)
@@ -165,11 +164,12 @@ def main() -> int:
     parser.add_argument("--github-output", type=Path, default=None)
     args = parser.parse_args()
 
-    candidate = PublicationManifest.from_json(json.loads(args.candidate_publication_json.read_text(encoding="utf-8")))
+    candidate = PublicationManifest.from_json_text(
+        args.candidate_publication_json.read_text(encoding="utf-8")
+    )
     if candidate.status not in {PublicationStatus.PUBLISHED, PublicationStatus.NO_REPORT}:
         result = PublishMasterResult(status="failed", master_state_updated=False, error="candidate is not publishable")
-        args.result_json.parent.mkdir(parents=True, exist_ok=True)
-        args.result_json.write_text(json.dumps(result.to_json(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        _write_result_json(args.result_json, result)
         _write_github_output(args.github_output, result)
         return 1
     result = publish_master(
@@ -183,8 +183,7 @@ def main() -> int:
             counts=candidate.counts,
         )
     )
-    args.result_json.parent.mkdir(parents=True, exist_ok=True)
-    args.result_json.write_text(json.dumps(result.to_json(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    _write_result_json(args.result_json, result)
     _write_github_output(args.github_output, result)
     return 0 if result.status != "failed" else 1
 

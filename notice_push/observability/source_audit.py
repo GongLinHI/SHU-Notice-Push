@@ -10,9 +10,10 @@ class SourceAuditor:
         self,
         http_client,
         adapter_factory: Callable[[NoticeSource], object],
-        min_list_items: int = 1,
-        sample_detail_count: int = 1,
-        required_content_kinds: tuple[str, ...] = ("text", "pdf", "image"),
+        *,
+        min_list_items: int,
+        sample_detail_count: int,
+        required_content_kinds: tuple[str, ...],
     ):
         self.http_client = http_client
         self.adapter_factory = adapter_factory

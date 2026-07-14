@@ -1,14 +1,18 @@
 from __future__ import annotations
 
-import json
 import re
 import shutil
 import sqlite3
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from notice_push.observability.publication_manifest import PublicationManifest
+from notice_push.observability.run_summary_contract import (
+    RUN_SUMMARY_SCHEMA_VERSION,
+    FailureRunSummaryContract,
+    RunSummaryContract,
+)
 from notice_push.observability.sqlite_backup import backup_sqlite
 
 
@@ -52,10 +56,11 @@ def build_failure_snapshot(context: FailureSnapshotContext) -> Path:
     blockers = context.publication.blockers
     if state_snapshot_failed and "state_snapshot_backup_failed" not in blockers:
         blockers = (*blockers, "state_snapshot_backup_failed")
-    snapshot_publication = replace(
-        context.publication,
-        blockers=blockers,
-        state_snapshot_available=state_snapshot_available,
+    snapshot_publication = context.publication.model_copy(
+        update={
+            "blockers": blockers,
+            "state_snapshot_available": state_snapshot_available,
+        }
     )
     _copy_or_write_summary(
         context.run_summary_path,
@@ -71,8 +76,10 @@ def build_failure_snapshot(context: FailureSnapshotContext) -> Path:
             context.secrets,
         )
 
-    publication_payload = snapshot_publication.to_json()
-    _write_json(destination / "publication.json", publication_payload)
+    (destination / "publication.json").write_text(
+        snapshot_publication.to_json_text(),
+        encoding="utf-8",
+    )
     _write_metadata(destination / "metadata.md", snapshot_publication, state_snapshot_available)
     return destination
 
@@ -148,33 +155,23 @@ def _copy_or_write_summary(
     if source and Path(source).is_file():
         text = _read_sanitized_text(source, secrets)
         try:
-            payload = json.loads(text)
-        except json.JSONDecodeError:
+            summary = RunSummaryContract.from_json_text(text)
+        except ValueError:
             pass
         else:
-            if isinstance(payload, dict):
-                destination.write_text(text, encoding="utf-8")
-                return
-    _write_json(
-        destination,
-        {
-            "schema_version": 2,
-            "report_date": publication.report_date,
-            "publication_eligibility": publication.status.value,
-            "publication_blockers": list(publication.blockers),
-            "pipeline_exit_code": publication.pipeline_exit_code,
-            "pipeline_log_path": "notice_pipeline.log",
-            "counts": publication.counts.to_json(),
-            "fallback": True,
-        },
+            destination.write_text(summary.to_json_text(), encoding="utf-8")
+            return
+    fallback = FailureRunSummaryContract(
+        schema_version=RUN_SUMMARY_SCHEMA_VERSION,
+        report_date=publication.report_date,
+        publication_eligibility=publication.status,
+        publication_blockers=publication.blockers,
+        pipeline_exit_code=publication.pipeline_exit_code,
+        pipeline_log_path="notice_pipeline.log",
+        counts=publication.counts,
+        fallback=True,
     )
-
-
-def _write_json(path: Path, payload: dict[str, object]) -> None:
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    destination.write_text(fallback.to_json_text(), encoding="utf-8")
 
 
 def _write_metadata(path: Path, publication: PublicationManifest, state_snapshot_available: bool) -> None:

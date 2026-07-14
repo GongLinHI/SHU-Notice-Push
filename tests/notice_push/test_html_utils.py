@@ -2,18 +2,19 @@ from datetime import datetime
 
 from bs4 import BeautifulSoup
 
-from notice_push.parsing.html import (
-    ParsingRules,
-    absolute_url,
-    clean_text,
+from notice_push.parsing.assets import (
     extract_image_assets,
-    extract_pdfjs_assets,
-    extract_text_blocks,
     infer_content_kind,
-    is_external_video_page,
-    parse_date,
+)
+from notice_push.parsing.content import (
+    ParsingRules,
+    clean_text,
+    extract_text_blocks,
     remove_noise_nodes,
 )
+from notice_push.parsing.dates import parse_date
+from notice_push.parsing.pdfjs import extract_pdfjs_assets
+from notice_push.parsing.urls import absolute_url, is_external_video_page
 from notice_push.domain import NoticeAsset
 
 

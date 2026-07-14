@@ -7,6 +7,7 @@ pytestmark = pytest.mark.usefixtures("seed_runtime_config_for_temporary_repo")
 
 from notice_push.settings.loader import load_config
 from notice_push.crawler import failures
+from notice_push.crawler.failures import FailureRetryPolicy
 from notice_push.domain import Attachment, NoticeAsset, NoticeDetail, NoticeListItem, NoticeSummary
 from notice_push.storage import NoticeStorage
 
@@ -22,6 +23,14 @@ def make_item(source_id: str, url: str, title: str = "测试通知") -> NoticeLi
     )
 
 
+def classify(storage, items, *, retry_failed=False, failed_retry_limit=0):
+    return storage.classify_pipeline_items(
+        items,
+        retry_failed=retry_failed,
+        retry_policy=FailureRetryPolicy(limit=failed_retry_limit, after_hours=0),
+    )
+
+
 def test_storage_initializes_sources_and_deduplicates_per_source(tmp_path):
     config = load_config(env={}, repo_root=tmp_path)
     storage = NoticeStorage(tmp_path / "state.sqlite3", config.sources)
@@ -30,17 +39,17 @@ def test_storage_initializes_sources_and_deduplicates_per_source(tmp_path):
     item = make_item("shu_official", "https://example.com/notice.htm")
     same_url_other_source = make_item("management_school", "https://example.com/notice.htm")
 
-    new_items, retry_items, updated_items = storage.split_pipeline_items([item, same_url_other_source])
-    assert new_items == [item, same_url_other_source]
-    assert retry_items == []
-    assert updated_items == []
+    selection = classify(storage, [item, same_url_other_source])
+    assert selection.new_items == (item, same_url_other_source)
+    assert selection.retry_items == ()
+    assert selection.updated_seen == ()
 
     storage.upsert_seen_item(item)
 
-    new_items, retry_items, updated_items = storage.split_pipeline_items([item, same_url_other_source])
-    assert new_items == [same_url_other_source]
-    assert retry_items == []
-    assert updated_items == []
+    selection = classify(storage, [item, same_url_other_source])
+    assert selection.new_items == (same_url_other_source,)
+    assert selection.retry_items == ()
+    assert selection.updated_seen == ()
     assert storage.count_sources() == 3
 
 
@@ -54,7 +63,10 @@ def test_storage_touches_seen_items_without_resending(tmp_path):
 
     updated_item = make_item("shu_official", "https://example.com/notice.htm", title="新标题")
 
-    assert storage.split_pipeline_items([updated_item]) == ([], [], [])
+    selection = classify(storage, [updated_item])
+    assert selection.new_items == ()
+    assert selection.retry_items == ()
+    assert selection.updated_seen == ()
 
     after = storage.find_by_source_url(item.source_id, item.canonical_url)
     assert after["title"] == "新标题"
@@ -114,12 +126,15 @@ def test_storage_returns_retryable_failed_items_until_retry_limit(tmp_path):
     notice_id = storage.upsert_seen_item(item)
     storage.mark_failed(notice_id, "temporary empty detail", failure_type="detail_empty", retry_after_hours=0, retry_limit=2)
 
-    _, retry_items, _ = storage.split_pipeline_items([item], retry_failed=True, failed_retry_limit=2)
-    assert retry_items == [item]
+    selection = classify(storage, [item], retry_failed=True, failed_retry_limit=2)
+    assert selection.retry_items == (item,)
 
     storage.mark_failed(notice_id, "temporary empty detail again", failure_type="detail_empty", retry_after_hours=0, retry_limit=2)
 
-    assert storage.split_pipeline_items([item], retry_failed=True, failed_retry_limit=2) == ([], [], [])
+    selection = classify(storage, [item], retry_failed=True, failed_retry_limit=2)
+    assert selection.new_items == ()
+    assert selection.retry_items == ()
+    assert selection.updated_seen == ()
 
 
 def test_storage_uses_central_failure_retry_classification(monkeypatch, tmp_path):
@@ -131,7 +146,10 @@ def test_storage_uses_central_failure_retry_classification(monkeypatch, tmp_path
     storage.mark_failed(notice_id, "permanent", failure_type="custom_permanent", retry_after_hours=0, retry_limit=3)
     monkeypatch.setattr(failures, "PERMANENT_FAILURE_TYPES", {"custom_permanent"})
 
-    assert storage.split_pipeline_items([item], retry_failed=True, failed_retry_limit=3) == ([], [], [])
+    selection = classify(storage, [item], retry_failed=True, failed_retry_limit=3)
+    assert selection.new_items == ()
+    assert selection.retry_items == ()
+    assert selection.updated_seen == ()
 
 
 def test_storage_splits_first_seen_and_retryable_failed_items(tmp_path):
@@ -143,15 +161,16 @@ def test_storage_splits_first_seen_and_retryable_failed_items(tmp_path):
     notice_id = storage.upsert_seen_item(retry_item)
     storage.mark_failed(notice_id, "temporary empty detail", failure_type="detail_empty", retry_after_hours=0, retry_limit=3)
 
-    new_items, retry_items, updated_items = storage.split_pipeline_items(
+    selection = classify(
+        storage,
         [retry_item, new_item],
         retry_failed=True,
         failed_retry_limit=3,
     )
 
-    assert new_items == [new_item]
-    assert retry_items == [retry_item]
-    assert updated_items == []
+    assert selection.new_items == (new_item,)
+    assert selection.retry_items == (retry_item,)
+    assert selection.updated_seen == ()
 
 
 def test_storage_updates_changed_seen_detail_without_resending(tmp_path):
@@ -301,7 +320,10 @@ def test_storage_marks_bootstrap_baseline(tmp_path):
     baseline_item = make_item("graduate_school", "https://gs.shu.edu.cn/info/1026/baseline.htm")
     storage.mark_seen_baseline([baseline_item])
 
-    assert storage.split_pipeline_items([baseline_item]) == ([], [], [])
+    selection = classify(storage, [baseline_item])
+    assert selection.new_items == ()
+    assert selection.retry_items == ()
+    assert selection.updated_seen == ()
     assert storage.find_by_source_url("graduate_school", baseline_item.canonical_url)["status"] == "seen_baseline"
 
 

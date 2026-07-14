@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
-from dataclasses import replace
 from pathlib import Path
 
 from notice_push.observability.publication import PublicationStatus
@@ -22,9 +20,8 @@ def load_candidate_or_fallback(
     failure_snapshot_branch: str = FAILURE_SNAPSHOT_BRANCH,
 ) -> PublicationManifest:
     try:
-        payload = json.loads(candidate_path.read_text(encoding="utf-8"))
-        return PublicationManifest.from_json(payload)
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return PublicationManifest.from_json_text(candidate_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
         return PublicationManifest.blocked_fallback(
             report_date=report_date,
             run_id=run_id,
@@ -46,9 +43,10 @@ def finalize_publication(
     master_publish_error: str = "",
 ) -> PublicationManifest:
     if candidate.status is PublicationStatus.BLOCKED:
-        return replace(
-            candidate,
-            master_state_updated=candidate.master_state_updated or master_state_updated,
+        return candidate.model_copy(
+            update={
+                "master_state_updated": candidate.master_state_updated or master_state_updated,
+            }
         )
     if candidate.status is PublicationStatus.PUBLISHED and render_html_status not in {"success", "succeeded"}:
         return _block(candidate, "html_render_failed", master_state_updated=master_state_updated)
@@ -59,7 +57,7 @@ def finalize_publication(
             master_state_updated=master_state_updated,
             failure_detail=master_publish_error,
         )
-    return replace(candidate, master_state_updated=master_state_updated)
+    return candidate.model_copy(update={"master_state_updated": master_state_updated})
 
 
 def _block(
@@ -69,17 +67,22 @@ def _block(
     master_state_updated: bool,
     failure_detail: str = "",
 ) -> PublicationManifest:
-    return replace(
-        candidate,
-        status=PublicationStatus.BLOCKED,
-        blockers=(blocker,),
-        master_state_updated=master_state_updated,
-        report_email_sent=False,
-        alert_email_requested=True,
-        failure_snapshot_push_status="pending",
-        failure_snapshot_path=f"failure-snapshots/{candidate.report_date}/run-{candidate.workflow_run_id}",
-        artifact_name=f"notice-failure-snapshot-{candidate.report_date}-{candidate.workflow_run_id}",
-        failure_detail=failure_detail,
+    return candidate.model_copy(
+        update={
+            "status": PublicationStatus.BLOCKED,
+            "blockers": (blocker,),
+            "master_state_updated": master_state_updated,
+            "report_email_sent": False,
+            "alert_email_requested": True,
+            "failure_snapshot_push_status": "pending",
+            "failure_snapshot_path": (
+                f"failure-snapshots/{candidate.report_date}/run-{candidate.workflow_run_id}"
+            ),
+            "artifact_name": (
+                f"notice-failure-snapshot-{candidate.report_date}-{candidate.workflow_run_id}"
+            ),
+            "failure_detail": failure_detail,
+        }
     )
 
 
@@ -127,10 +130,7 @@ def main() -> int:
         master_publish_error=args.master_publish_error,
     )
     args.publication_json.parent.mkdir(parents=True, exist_ok=True)
-    args.publication_json.write_text(
-        json.dumps(manifest.to_json(), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    args.publication_json.write_text(manifest.to_json_text(), encoding="utf-8")
     output_path = args.github_output or _github_output_path()
     _write_outputs(output_path, manifest.workflow_outputs())
     return 0

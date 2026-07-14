@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,20 +12,10 @@ from notice_push.observability.publication import (
     decide_pipeline_publication,
     decide_workflow_publication,
 )
-from notice_push.observability.publication_manifest import PublicationCounts, PublicationManifest
-
-
-COUNTER_KEYS = (
-    "new_count",
-    "updated_count",
-    "retried_count",
-    "summarized_count",
-    "failed_count",
-    "manual_review_count",
-    "source_error_count",
-    "audit_error_count",
-    "audit_warning_count",
-    "refresh_seen_error_count",
+from notice_push.observability.publication_manifest import (
+    COUNT_FIELD_NAMES,
+    PublicationCounts,
+    PublicationManifest,
 )
 
 
@@ -87,7 +76,7 @@ def _parse_key_value_lines(output: str) -> dict[str, str]:
 def _parse_counters(values: dict[str, str]) -> tuple[PublicationCounts, bool]:
     counters: dict[str, int] = {}
     complete = True
-    for key in COUNTER_KEYS:
+    for key in COUNT_FIELD_NAMES:
         try:
             counters[key] = int(values[key])
         except (KeyError, ValueError):
@@ -128,10 +117,7 @@ def main() -> int:
         failure_snapshot_branch=args.failure_snapshot_branch,
     )
     args.candidate_publication_json.parent.mkdir(parents=True, exist_ok=True)
-    args.candidate_publication_json.write_text(
-        json.dumps(publication.to_json(), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    args.candidate_publication_json.write_text(publication.to_json_text(), encoding="utf-8")
 
     output_path = args.github_output or Path(os.environ.get("GITHUB_OUTPUT", ""))
     if output_path:

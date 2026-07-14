@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from notice_push.app_factory import build_detail_parser
 from notice_push.domain import NoticeListItem
 from notice_push.pipeline import create_adapter
 from notice_push.settings.loader import load_config
@@ -11,6 +12,12 @@ from notice_push.settings.loader import load_config
 
 pytestmark = pytest.mark.usefixtures("seed_runtime_config_for_temporary_repo")
 FIXTURE_ROOT = Path(__file__).parents[1] / "fixtures" / "sources"
+
+
+def _source_and_adapter(tmp_path, source_id):
+    config = load_config(env={}, repo_root=tmp_path)
+    source = config.source_by_id(source_id)
+    return source, create_adapter(source, detail_parser=build_detail_parser(config))
 
 
 @dataclass(frozen=True)
@@ -45,8 +52,7 @@ def _read(source_id: str, name: str) -> str:
 
 @pytest.mark.parametrize("contract", LIST_CONTRACTS, ids=lambda contract: contract.source_id)
 def test_source_list_and_pagination_contract(tmp_path, contract):
-    source = load_config(env={}, repo_root=tmp_path).source_by_id(contract.source_id)
-    adapter = create_adapter(source)
+    source, adapter = _source_and_adapter(tmp_path, contract.source_id)
     html = _read(contract.source_id, "list.html")
 
     items = adapter.parse_list_page(html, source.list_url)
@@ -59,8 +65,7 @@ def test_source_list_and_pagination_contract(tmp_path, contract):
 
 @pytest.mark.parametrize("source_id", [contract.source_id for contract in LIST_CONTRACTS])
 def test_source_text_detail_contract(tmp_path, source_id):
-    source = load_config(env={}, repo_root=tmp_path).source_by_id(source_id)
-    adapter = create_adapter(source)
+    source, adapter = _source_and_adapter(tmp_path, source_id)
     item = adapter.parse_list_page(_read(source_id, "list.html"), source.list_url)[0]
 
     detail = adapter.parse_detail(_read(source_id, "detail_text.html"), item)
@@ -109,8 +114,7 @@ def test_source_text_detail_contract(tmp_path, source_id):
     ],
 )
 def test_source_media_detail_contract(tmp_path, source_id, fixture_name, url, title, content_kind, asset_kind):
-    source = load_config(env={}, repo_root=tmp_path).source_by_id(source_id)
-    adapter = create_adapter(source)
+    source, adapter = _source_and_adapter(tmp_path, source_id)
     item = NoticeListItem(source_id=source_id, url=url, canonical_url=url, title=title)
 
     detail = adapter.parse_detail(_read(source_id, fixture_name), item)
@@ -121,8 +125,7 @@ def test_source_media_detail_contract(tmp_path, source_id, fixture_name, url, ti
 
 @pytest.mark.parametrize("fixture_name", ["detail_video.html", "detail_video_static.html"])
 def test_graduate_school_external_video_contract(tmp_path, fixture_name):
-    source = load_config(env={}, repo_root=tmp_path).source_by_id("graduate_school")
-    adapter = create_adapter(source)
+    source, adapter = _source_and_adapter(tmp_path, "graduate_school")
     url = "https://www.kankanews.com/detail/dZ2e81vaawR"
     item = NoticeListItem(
         source_id=source.id,

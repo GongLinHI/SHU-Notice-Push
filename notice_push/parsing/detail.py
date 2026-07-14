@@ -4,13 +4,15 @@ from dataclasses import dataclass
 
 from bs4 import BeautifulSoup, Tag
 
-from notice_push.parsing.html import (
-    DEFAULT_PARSING_RULES,
-    ParsingRules,
+from notice_push.parsing.assets import (
     extract_detail_assets,
-    extract_text_blocks,
     infer_content_kind,
     promote_primary_assets,
+)
+from notice_push.parsing.content import (
+    DEFAULT_PARSING_RULES,
+    ParsingRules,
+    extract_text_blocks,
     select_main_content,
 )
 from notice_push.domain import NoticeAsset

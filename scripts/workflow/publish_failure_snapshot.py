@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import argparse
-import json
 import shutil
 import subprocess
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, StrictBool, StrictStr
 
 from notice_push.observability.failure_snapshot import cleanup_expired_snapshot_dates
 
@@ -31,18 +32,12 @@ class SnapshotPublishRequest:
     blockers: tuple[str, ...]
 
 
-@dataclass(frozen=True)
-class SnapshotPublishResult:
-    status: SnapshotPublishStatus
-    error: str = ""
-    cleanup_limit_exceeded: bool = False
+class SnapshotPublishResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
-    def to_json(self) -> dict[str, object]:
-        return {
-            "status": self.status,
-            "error": self.error,
-            "cleanup_limit_exceeded": self.cleanup_limit_exceeded,
-        }
+    status: SnapshotPublishStatus
+    error: StrictStr = ""
+    cleanup_limit_exceeded: StrictBool = False
 
 
 def publish_failure_snapshot(request: SnapshotPublishRequest) -> SnapshotPublishResult:
@@ -161,6 +156,11 @@ def _write_github_output(path: Path | None, result: SnapshotPublishResult) -> No
         stream.write(f"error={result.error}\n")
 
 
+def _write_result_json(path: Path, result: SnapshotPublishResult) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(result.model_dump_json(indent=2) + "\n", encoding="utf-8")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Publish one diagnostic failure snapshot to its isolated branch.")
     parser.add_argument("--checkout", type=Path, required=True)
@@ -195,8 +195,7 @@ def main() -> int:
             blockers=tuple(value for value in args.publication_blockers.split(",") if value),
         )
     )
-    args.result_json.parent.mkdir(parents=True, exist_ok=True)
-    args.result_json.write_text(json.dumps(result.to_json(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    _write_result_json(args.result_json, result)
     if result.cleanup_limit_exceeded:
         print(
             "warning: failure snapshot retention cleanup was skipped because the scan limit was exceeded"

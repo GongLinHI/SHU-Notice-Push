@@ -5,7 +5,8 @@ from abc import ABC, abstractmethod
 from bs4 import BeautifulSoup
 
 from notice_push.parsing.detail import DetailParser
-from notice_push.parsing.html import absolute_url, clean_text
+from notice_push.parsing.content import clean_text
+from notice_push.parsing.urls import absolute_url
 from notice_push.domain import NoticeDetail, NoticeListItem, NoticeSource
 
 

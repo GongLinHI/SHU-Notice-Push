@@ -4,6 +4,7 @@ import pytest
 
 pytestmark = pytest.mark.usefixtures("seed_runtime_config_for_temporary_repo")
 
+from notice_push.app_factory import build_detail_parser
 from notice_push.parsing.detail import ParsedDetailBody
 from notice_push.domain import NoticeListItem
 from notice_push.settings.loader import load_config
@@ -15,13 +16,18 @@ from notice_push.sources.shu_official import ShuOfficialAdapter
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "sources"
 
 
+def _source_and_adapter(tmp_path, source_id, adapter_type):
+    config = load_config(env={}, repo_root=tmp_path)
+    source = config.source_by_id(source_id)
+    return source, adapter_type(source, detail_parser=build_detail_parser(config))
+
+
 def read_fixture(name: str) -> str:
     return (FIXTURE_DIR / name).read_text(encoding="utf-8")
 
 
 def test_shu_official_adapter_parses_list_next_page_and_detail(tmp_path):
-    source = load_config(env={}, repo_root=tmp_path).source_by_id("shu_official")
-    adapter = ShuOfficialAdapter(source)
+    source, adapter = _source_and_adapter(tmp_path, "shu_official", ShuOfficialAdapter)
 
     items = adapter.parse_list_page(read_fixture("shu_official/list.html"), source.list_url)
     detail = adapter.parse_detail(read_fixture("shu_official/detail_text.html"), items[0])
@@ -60,8 +66,7 @@ def test_source_adapter_uses_injected_detail_parser(tmp_path):
 
 
 def test_management_school_adapter_parses_table_list_next_page_and_detail(tmp_path):
-    source = load_config(env={}, repo_root=tmp_path).source_by_id("management_school")
-    adapter = ManagementSchoolAdapter(source)
+    source, adapter = _source_and_adapter(tmp_path, "management_school", ManagementSchoolAdapter)
 
     items = adapter.parse_list_page(read_fixture("management_school/list.html"), source.list_url)
     detail = adapter.parse_detail(read_fixture("management_school/detail_text.html"), items[0])
@@ -76,8 +81,7 @@ def test_management_school_adapter_parses_table_list_next_page_and_detail(tmp_pa
 
 
 def test_management_school_adapter_extracts_pdf_body_asset(tmp_path):
-    source = load_config(env={}, repo_root=tmp_path).source_by_id("management_school")
-    adapter = ManagementSchoolAdapter(source)
+    source, adapter = _source_and_adapter(tmp_path, "management_school", ManagementSchoolAdapter)
     item = NoticeListItem(
         source_id=source.id,
         url="https://ms.shu.edu.cn/info/1245/91745.htm",
@@ -95,8 +99,7 @@ def test_management_school_adapter_extracts_pdf_body_asset(tmp_path):
 
 
 def test_management_school_adapter_extracts_pdfjs_iframe_body_asset(tmp_path):
-    source = load_config(env={}, repo_root=tmp_path).source_by_id("management_school")
-    adapter = ManagementSchoolAdapter(source)
+    source, adapter = _source_and_adapter(tmp_path, "management_school", ManagementSchoolAdapter)
     item = NoticeListItem(
         source_id=source.id,
         url="https://ms.shu.edu.cn/info/1245/91745.htm",
@@ -113,8 +116,7 @@ def test_management_school_adapter_extracts_pdfjs_iframe_body_asset(tmp_path):
 
 
 def test_management_school_adapter_extracts_image_body_asset(tmp_path):
-    source = load_config(env={}, repo_root=tmp_path).source_by_id("management_school")
-    adapter = ManagementSchoolAdapter(source)
+    source, adapter = _source_and_adapter(tmp_path, "management_school", ManagementSchoolAdapter)
     item = NoticeListItem(
         source_id=source.id,
         url="https://ms.shu.edu.cn/info/1245/91475.htm",
@@ -132,8 +134,7 @@ def test_management_school_adapter_extracts_image_body_asset(tmp_path):
 
 
 def test_graduate_school_adapter_extracts_pdfjs_script_body_asset(tmp_path):
-    source = load_config(env={}, repo_root=tmp_path).source_by_id("graduate_school")
-    adapter = GraduateSchoolAdapter(source)
+    source, adapter = _source_and_adapter(tmp_path, "graduate_school", GraduateSchoolAdapter)
     item = NoticeListItem(
         source_id=source.id,
         url="https://gs.shu.edu.cn/info/1029/172562.htm",
@@ -151,8 +152,7 @@ def test_graduate_school_adapter_extracts_pdfjs_script_body_asset(tmp_path):
 
 
 def test_graduate_school_adapter_extracts_external_video_asset(tmp_path):
-    source = load_config(env={}, repo_root=tmp_path).source_by_id("graduate_school")
-    adapter = GraduateSchoolAdapter(source)
+    source, adapter = _source_and_adapter(tmp_path, "graduate_school", GraduateSchoolAdapter)
     item = NoticeListItem(
         source_id=source.id,
         url="https://www.kankanews.com/detail/dZ2e81vaawR",
@@ -167,8 +167,7 @@ def test_graduate_school_adapter_extracts_external_video_asset(tmp_path):
 
 
 def test_graduate_school_adapter_marks_kankanews_static_detail_as_external_video(tmp_path):
-    source = load_config(env={}, repo_root=tmp_path).source_by_id("graduate_school")
-    adapter = GraduateSchoolAdapter(source)
+    source, adapter = _source_and_adapter(tmp_path, "graduate_school", GraduateSchoolAdapter)
     item = NoticeListItem(
         source_id=source.id,
         url="https://www.kankanews.com/detail/dZ2e81vaawR",
@@ -183,8 +182,7 @@ def test_graduate_school_adapter_marks_kankanews_static_detail_as_external_video
 
 
 def test_graduate_school_adapter_parses_row_list_next_page_detail_and_attachment(tmp_path):
-    source = load_config(env={}, repo_root=tmp_path).source_by_id("graduate_school")
-    adapter = GraduateSchoolAdapter(source)
+    source, adapter = _source_and_adapter(tmp_path, "graduate_school", GraduateSchoolAdapter)
 
     items = adapter.parse_list_page(read_fixture("graduate_school/list.html"), source.list_url)
     detail = adapter.parse_detail(read_fixture("graduate_school/detail_text.html"), items[0])
@@ -218,9 +216,15 @@ def test_source_adapters_fallback_to_generic_article_content(tmp_path):
     </html>
     """
     adapters = [
-        ShuOfficialAdapter(config.source_by_id("shu_official")),
-        ManagementSchoolAdapter(config.source_by_id("management_school")),
-        GraduateSchoolAdapter(config.source_by_id("graduate_school")),
+        ShuOfficialAdapter(config.source_by_id("shu_official"), detail_parser=build_detail_parser(config)),
+        ManagementSchoolAdapter(
+            config.source_by_id("management_school"),
+            detail_parser=build_detail_parser(config),
+        ),
+        GraduateSchoolAdapter(
+            config.source_by_id("graduate_school"),
+            detail_parser=build_detail_parser(config),
+        ),
     ]
 
     for adapter in adapters:

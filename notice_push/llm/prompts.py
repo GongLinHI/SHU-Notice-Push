@@ -1,10 +1,27 @@
 from __future__ import annotations
 
 from pathlib import Path
+import threading
 from typing import Optional
 
 from notice_push.domain import NoticeDetail
 from notice_push.reporting.resources import visible_notice_resources
+
+
+class CachedPrompt:
+    def __init__(self, prompt_dir: Path, prompt_name: str):
+        self.prompt_dir = Path(prompt_dir)
+        self.prompt_name = prompt_name
+        self._content: str | None = None
+        self._lock = threading.Lock()
+
+    def get(self) -> str:
+        if self._content is not None:
+            return self._content
+        with self._lock:
+            if self._content is None:
+                self._content = load_prompt(self.prompt_dir, self.prompt_name)
+        return self._content
 
 
 def load_prompt(prompt_dir: Path, prompt_name: str) -> str:

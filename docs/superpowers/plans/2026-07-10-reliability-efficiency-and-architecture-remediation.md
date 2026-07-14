@@ -475,7 +475,7 @@ git diff --check
 - 修改：`tests/notice_push/test_config_models.py`
 - 新建：`tests/notice_push/test_runtime_config_contract.py`
 
-- [ ] **Step 1：写严格 YAML 合同失败测试。**
+- [x] **Step 1：写严格 YAML 合同失败测试。**
 
 ```python
 def test_load_config_rejects_missing_source_definition(tmp_path):
@@ -491,7 +491,7 @@ def test_load_config_does_not_restore_removed_builtin_provider(tmp_path):
     assert set(config.llm_providers) == {"custom"}
 ```
 
-- [ ] **Step 2：删除真实生产默认值。**
+- [x] **Step 2：删除真实生产默认值。**
 
 删除 `_built_in_source_defaults()`、`DEFAULT_LLM_PROVIDERS`、`DEFAULT_LLM_ROUTING` 和 `PROFILE_DEFAULTS` 中的真实生产数值。Loader 必须要求：
 
@@ -503,7 +503,7 @@ def test_load_config_does_not_restore_removed_builtin_provider(tmp_path):
 
 错误信息必须带完整 YAML 路径，例如 `profiles.daily.http_timeout must be an integer`，避免只报泛化 `KeyError`。
 
-- [ ] **Step 3：补齐 YAML，并收紧 `.env.example`。**
+- [x] **Step 3：补齐 YAML，并收紧 `.env.example`。**
 
 `runtime.yml` 持有所有非机密配置。`.env.example` 只保留：
 
@@ -516,7 +516,7 @@ KIMI_MODEL=kimi-k2.7-code
 
 不在 `.env.example` 放 URL、页数、并发、超时、分支名或通知源地址。
 
-- [ ] **Step 4：运行配置测试和 doctor。**
+- [x] **Step 4：运行配置测试和 doctor。**
 
 运行：
 
@@ -541,7 +541,7 @@ conda run --no-capture-output -n spider python -m notice_push --doctor --state-p
 - 新建：`tests/notice_push/test_source_selection.py`
 - 修改：`tests/notice_push/test_storage.py`
 
-- [ ] **Step 1：写 source 选择一致性测试。**
+- [x] **Step 1：写 source 选择一致性测试。**
 
 ```python
 def test_select_sources_rejects_unknown_ids_and_ignores_disabled_by_default():
@@ -552,7 +552,7 @@ def test_select_sources_rejects_unknown_ids_and_ignores_disabled_by_default():
         select_sources(sources, requested_ids=("missing",))
 ```
 
-- [ ] **Step 2：实现唯一选择函数。**
+- [x] **Step 2：实现唯一选择函数。**
 
 ```python
 def select_sources(
@@ -563,15 +563,15 @@ def select_sources(
 
 CLI 在构建 pipeline 前用此函数校验；`run_source_audit` 和 Pipeline 使用同一函数。删除 `cli.select_sources`、`app_factory._select_sources`、`NoticePipeline._select_sources`。
 
-- [ ] **Step 3：使 storage 复用失败分类规则。**
+- [x] **Step 3：使 storage 复用失败分类规则。**
 
 删除 `storage/database.py` 的 `PERMANENT_FAILURE_TYPES`。`_row_retryable()` 通过 `crawler.failures.is_retryable_failure_type()` 判断，确保新增永久失败类型只维护一次。
 
-- [ ] **Step 4：删除无生产调用的旧 storage 筛选 API。**
+- [x] **Step 4：删除无生产调用的旧 storage 筛选 API。**
 
 确认 `filter_new_items`、`filter_processable_items`、`split_processable_items` 仅被旧测试使用后，删除它们并将测试改为 `split_pipeline_items` 的明确断言。这里不保留兼容层，因为项目不再需要旧入口兼容。
 
-- [ ] **Step 5：运行针对性回归。**
+- [x] **Step 5：运行针对性回归。**
 
 运行：
 
@@ -597,7 +597,7 @@ conda run --no-capture-output -n spider pytest tests/notice_push/test_source_sel
 - 新建：`tests/notice_push/test_http_cache.py`
 - 修改：`tests/notice_push/test_config_models.py`
 
-- [ ] **Step 1：写 HTTP 重试矩阵的失败测试。**
+- [x] **Step 1：写 HTTP 重试矩阵的失败测试。**
 
 ```python
 @pytest.mark.parametrize("status,should_retry", [(404, False), (401, False), (429, True), (500, True), (503, True)])
@@ -608,7 +608,7 @@ def test_retry_after_is_capped_by_profile_limit():
     assert retry_delay_seconds("120", fallback_delay=1.0, max_delay=30.0) == 30.0
 ```
 
-- [ ] **Step 2：实现 HTTP 重试策略。**
+- [x] **Step 2：实现 HTTP 重试策略。**
 
 在 `http_retry.py` 定义：
 
@@ -621,7 +621,7 @@ def retry_delay_seconds(retry_after: str | None, *, fallback_delay: float, max_d
 
 `HttpClient._get_response()` 只重试连接/读取超时类 `requests.RequestException`，以及集合内状态码；其他 4xx 立即抛出。遇到有 `Retry-After` 的 429/503 时优先使用其秒数或 HTTP 日期，并按 profile `http_max_retry_delay_seconds` 封顶。每次失败响应必须 `close()`，避免连接泄漏。
 
-- [ ] **Step 3：将所有 HTTP 退避参数加入 profile。**
+- [x] **Step 3：将所有 HTTP 退避参数加入 profile。**
 
 给 `NoticeRuntimeProfile` 和两个 YAML profile 增加：
 
@@ -632,7 +632,7 @@ http_max_retry_delay_seconds: 30
 
 `build_http_client()` 必须把已有 `http_initial_retry_delay`、新增退避倍数、延迟上限都传给 `HttpClient`，不能让 `HttpClient` 构造器默认值绕过 YAML。
 
-- [ ] **Step 4：实现单次运行 `get_text` 成功响应缓存。**
+- [x] **Step 4：实现单次运行 `get_text` 成功响应缓存。**
 
 ```python
 class RunScopedTextCache:
@@ -646,7 +646,7 @@ class CachedHttpClient:
 
 缓存只存在于一次 `build_pipeline()` 所创建的对象中；只缓存成功的文本，不缓存异常、字节流或媒体下载。使用每 URL in-flight 同步，避免 audit 与后续并发详情请求产生缓存击穿。Pipeline 与 `SourceAuditor` 必须共享同一 `CachedHttpClient` 实例。
 
-- [ ] **Step 5：写 audit 与扫描复用测试。**
+- [x] **Step 5：写 audit 与扫描复用测试。**
 
 ```python
 def test_audit_then_pipeline_fetches_same_list_and_detail_url_once():
@@ -658,7 +658,7 @@ def test_audit_then_pipeline_fetches_same_list_and_detail_url_once():
     assert client.calls[detail_url] == 1
 ```
 
-- [ ] **Step 6：运行 transport 与 pipeline 测试。**
+- [x] **Step 6：运行 transport 与 pipeline 测试。**
 
 运行：
 
@@ -680,11 +680,11 @@ conda run --no-capture-output -n spider pytest tests/notice_push/test_http_retry
 - 修改：`tests/notice_push/test_parsing.py` 或新建 `tests/notice_push/test_source_contracts.py`
 - 可能修改：`notice_push/sources/*.py`
 
-- [ ] **Step 1：确定 fixture 最小集合。**
+- [x] **Step 1：确定 fixture 最小集合。**
 
 每个来源至少保留：目录首页、包含文本正文的详情页；管理学院和研究生院另保留 PDF/图片或 PDFJS 详情页；研究生院保留外链视频页。Fixture 删除无关页面区域和可能包含个人信息的内容，但保留选择器、分页、编码、资源 URL 和日期结构。
 
-- [ ] **Step 2：写 adapter 合同测试。**
+- [x] **Step 2：写 adapter 合同测试。**
 
 ```python
 @pytest.mark.parametrize("source_id", ["shu_official", "management_school", "graduate_school"])
@@ -699,11 +699,11 @@ def test_source_adapter_contract(source_id, fixture_html):
 
 详情合同分别断言 `text`、`pdf`、`image`、`video` 的 `content_kind` 和 primary/attachment asset，不断言模型摘要内容。
 
-- [ ] **Step 3：必要时使用 Playwright MCP 复核真实 DOM。**
+- [x] **Step 3：必要时使用 Playwright MCP 复核真实 DOM。**
 
 仅当 fixture 与当前网页结构不一致时，打开来源目录与一条详情页，记录选择器变化和分页链接机制；将更新后的最小 HTML 结构整理为 fixture，再修改 adapter。不得把浏览器 profile、Cookie 或下载媒体文件提交到仓库。
 
-- [ ] **Step 4：运行所有来源解析测试。**
+- [x] **Step 4：运行所有来源解析测试。**
 
 运行：
 
@@ -728,7 +728,7 @@ conda run --no-capture-output -n spider pytest tests/notice_push/test_sources.py
 - 新建：`tests/notice_push/test_source_scan.py`
 - 新建：`tests/notice_push/test_notice_processing.py`
 
-- [ ] **Step 1：为目录扫描提取写测试。**
+- [x] **Step 1：为目录扫描提取写测试。**
 
 ```python
 def test_scan_source_stops_on_repeat_url_cutoff_and_page_limit():
@@ -739,11 +739,11 @@ def test_scan_source_stops_on_repeat_url_cutoff_and_page_limit():
     assert outcome.source_errors == ()
 ```
 
-- [ ] **Step 2：实现 `scan_source_pages()`。**
+- [x] **Step 2：实现 `scan_source_pages()`。**
 
 它只负责目录页：请求、解析、已访问 URL、页数、lookback、分页和 `SourceError`。返回不可变 `SourceScanOutcome`，包含按页的 `ScannedListPage`、停止原因和错误；不访问 SQLite、不抓详情、不调用 LLM。
 
-- [ ] **Step 3：实现通知处理协调器。**
+- [x] **Step 3：实现通知处理协调器。**
 
 ```python
 class NoticeProcessor:
@@ -753,11 +753,11 @@ class NoticeProcessor:
 
 它集中处理新通知、失败重试、`updated_seen`、详情抓取、刷新已见正文和摘要；保留当前列表顺序与计数语义。`max_workers` 必须来自 `PipelineRunOptions`，删除 `runtime_profile("daily")` 的隐藏 fallback。
 
-- [ ] **Step 4：将 `NoticePipeline` 缩为应用编排器。**
+- [x] **Step 4：将 `NoticePipeline` 缩为应用编排器。**
 
 `NoticePipeline.run()` 只做：选择源、可选审计、依次调用 scanner/processor、合并结果、渲染报告、写 run summary、checkpoint。目标是控制在约 150 行以内，且每个子模块可独立测试。
 
-- [ ] **Step 5：运行行为回归。**
+- [x] **Step 5：运行行为回归。**
 
 运行：
 
@@ -780,7 +780,7 @@ conda run --no-capture-output -n spider pytest tests/notice_push/test_source_sca
 - 修改：`tests/notice_push/test_storage.py`
 - 新建：`tests/notice_push/test_storage_selection.py`
 
-- [ ] **Step 1：写批量分类查询测试。**
+- [x] **Step 1：写批量分类查询测试。**
 
 ```python
 def test_classify_pipeline_items_uses_one_select_per_chunk(storage, items, spy_connection):
@@ -791,7 +791,7 @@ def test_classify_pipeline_items_uses_one_select_per_chunk(storage, items, spy_c
     assert spy_connection.select_count <= 1
 ```
 
-- [ ] **Step 2：实现 `NoticeSelectionRepository`。**
+- [x] **Step 2：实现 `NoticeSelectionRepository`。**
 
 按同一 source 将 canonical URL 分块（每块最多 400 个，防止 SQLite 参数上限），用一条 `IN (...)` 查询拿到 `id`、`status`、失败字段和已见详情所需列。返回：
 
@@ -806,11 +806,11 @@ class PipelineItemSelection:
 
 保持输入顺序，避免并发后日报排序变化。
 
-- [ ] **Step 3：按事务角色拆分写入。**
+- [x] **Step 3：按事务角色拆分写入。**
 
 `SourceRepository` 负责 `sources` 表初始化/upsert；`NoticeRepository` 负责详情、摘要、失败、baseline 和 checkpoint；`NoticeStorage` 仅持有连接工厂、写锁与上述仓库组合，作为 Pipeline 注入的稳定门面。删除已确认无调用的旧筛选方法。
 
-- [ ] **Step 4：运行 SQLite 迁移与并发测试。**
+- [x] **Step 4：运行 SQLite 迁移与并发测试。**
 
 运行：
 
@@ -837,11 +837,11 @@ conda run --no-capture-output -n spider pytest tests/notice_push/test_storage.py
 - 修改：`tests/notice_push/test_html_utils.py`
 - 修改：`tests/notice_push/test_sources.py`
 
-- [ ] **Step 1：先移动测试导入，不改变断言内容。**
+- [x] **Step 1：先移动测试导入，不改变断言内容。**
 
 将日期测试导入改为 `notice_push.parsing.dates.parse_date`，PDFJS 测试改为 `notice_push.parsing.pdfjs.extract_pdfjs_assets`，资源测试改为 `notice_push.parsing.assets`，正文选择测试改为 `notice_push.parsing.content`。此步骤应先失败，证明迁移目标明确。
 
-- [ ] **Step 2：按职责移动实现。**
+- [x] **Step 2：按职责移动实现。**
 
 模块规则：
 
@@ -853,7 +853,7 @@ conda run --no-capture-output -n spider pytest tests/notice_push/test_storage.py
 
 更新 `DetailParser` 和 adapters 使用新模块；不保留 `html.py` 兼容转发层。
 
-- [ ] **Step 3：运行解析与来源回归。**
+- [x] **Step 3：运行解析与来源回归。**
 
 运行：
 
@@ -878,7 +878,7 @@ conda run --no-capture-output -n spider pytest tests/notice_push/test_html_utils
 - 修改：`tests/notice_push/test_summarizer.py`
 - 新建：`tests/notice_push/test_llm_registry.py`
 
-- [ ] **Step 1：写注册表和环境隔离测试。**
+- [x] **Step 1：写注册表和环境隔离测试。**
 
 ```python
 def test_registry_builds_configured_provider_without_factory_if_chain():
@@ -891,7 +891,7 @@ def test_text_summarizer_does_not_read_deepseek_environment_when_factory_supplie
     assert summarizer.summarize(1, detail).model == "configured-model"
 ```
 
-- [ ] **Step 2：提取共享格式处理器。**
+- [x] **Step 2：提取共享格式处理器。**
 
 ```python
 class SummaryFormatProcessor:
@@ -907,7 +907,7 @@ class SummaryFormatProcessor:
 
 它负责 normalize、validate、按配置次数生成 repair prompt；文本和 Kimi 摘要器各自只提供初始消息构造和 text chat 回调。
 
-- [ ] **Step 3：实现 registry。**
+- [x] **Step 3：实现 registry。**
 
 ```python
 SummarizerBuilder = Callable[[ResolvedLLMProvider, SummarizerDependencies], object]
@@ -918,11 +918,11 @@ def build_summarizer(provider: ResolvedLLMProvider, dependencies: SummarizerDepe
 
 内建注册 `openai_text` 与 `kimi_multimodal`。`app_factory` 只遍历 provider 并调用 `build_summarizer()`；未知 kind 在配置加载阶段和 registry 构建阶段都给出清晰错误。
 
-- [ ] **Step 4：移除模型类对环境变量的隐式读取。**
+- [x] **Step 4：移除模型类对环境变量的隐式读取。**
 
 `ResolvedLLMProvider` 是唯一读取 `api_key_env`、`model_env` 的位置。`NoticeSummarizer` 和 `KimiMultimodalSummarizer` 在创建真实 `OpenAI` client 时只使用构造器传入的 `api_key`/`base_url`；若 client 未注入且 key 为空，错误消息使用 provider 名称，不硬编码 `DEEPSEEK_API_KEY` 或 `KIMI_API_KEY`。
 
-- [ ] **Step 5：运行 LLM 回归。**
+- [x] **Step 5：运行 LLM 回归。**
 
 运行：
 
@@ -944,7 +944,7 @@ conda run --no-capture-output -n spider pytest tests/notice_push/test_llm_regist
 - 修改：`docs/superpowers/tdds/2026-07-10-failure-snapshot-publication-policy-tdd.md`
 - 新建：`docs/superpowers/reviews/2026-07-10-post-remediation-review.md`
 
-- [ ] **Step 1：为结构约束增加静态测试。**
+- [x] **Step 1：为结构约束增加静态测试。**
 
 在工作流测试中断言：
 
@@ -955,11 +955,11 @@ conda run --no-capture-output -n spider pytest tests/notice_push/test_llm_regist
 
 必要时采用 AST 测试而不是脆弱的全文字符串计数。
 
-- [ ] **Step 2：更新文档。**
+- [x] **Step 2：更新文档。**
 
 README 说明：正式发布严格模式、`bot/failure-snapshots` 的诊断用途、Artifact 保留期、`runtime.yml` 与 `.env` 的职责边界、日常 profile 与 backfill profile 的配置位置。项目文档补充模块图和新增源/新增 provider 的最短路径。
 
-- [ ] **Step 3：执行最终验证。**
+- [x] **Step 3：执行最终验证。**
 
 运行：
 
@@ -972,7 +972,7 @@ git diff --check
 
 预期：全部通过。
 
-- [ ] **Step 4：进行独立复审并写入结论。**
+- [x] **Step 4：进行独立复审并写入结论。**
 
 以当前 `master` 为基线审查未提交变更，重点确认：
 

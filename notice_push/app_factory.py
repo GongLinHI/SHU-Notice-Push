@@ -2,13 +2,12 @@ from __future__ import annotations
 
 from notice_push.domain.config import AppConfig
 from notice_push.parsing.detail import DetailParser
-from notice_push.parsing.html import ParsingRules
+from notice_push.parsing.content import ParsingRules
 from notice_push.http import HttpClient
 from notice_push.http_cache import CachedHttpClient
 from notice_push.llm import resolve_optional_provider
-from notice_push.llm.kimi import KimiMultimodalSummarizer
+from notice_push.llm.registry import SummarizerDependencies, build_summarizer
 from notice_push.llm.router import SummarizerRouter
-from notice_push.llm.text import NoticeSummarizer
 from notice_push.domain import NoticeRuntimeProfile
 from notice_push.pipeline import NoticePipeline, create_adapter
 from notice_push.observability.source_audit import SourceAuditor
@@ -39,9 +38,20 @@ def build_pipeline(config: AppConfig, profile: NoticeRuntimeProfile) -> NoticePi
     detail_parser = build_detail_parser(config)
     storage = NoticeStorage(config.state_path, config.sources)
     http_client = CachedHttpClient(build_http_client(profile))
+    dependencies = SummarizerDependencies(
+        prompt_dir=config.repo_root / "resources" / "prompts",
+        prompt_name=config.prompt_name,
+        profile=profile,
+        http_client=http_client,
+        media_policy=config.media_policy,
+        summary_format_repair_retries=config.summary_format_repair_retries,
+    )
     provider_summarizers = {
-        provider_id: _build_provider_summarizer(provider_id, config, profile, http_client)
-        for provider_id in config.llm_providers
+        provider_id: build_summarizer(
+            resolve_optional_provider(provider_id, provider_config),
+            dependencies,
+        )
+        for provider_id, provider_config in config.llm_providers.items()
     }
     summarizer = SummarizerRouter(
         provider_summarizers=provider_summarizers,
@@ -54,41 +64,6 @@ def build_pipeline(config: AppConfig, profile: NoticeRuntimeProfile) -> NoticePi
         summarizer=summarizer,
         adapter_factory=lambda source: create_adapter(source, detail_parser=detail_parser),
     )
-
-
-def _build_provider_summarizer(provider_id: str, config: AppConfig, profile: NoticeRuntimeProfile, http_client: HttpClient):
-    provider = resolve_optional_provider(provider_id, config.llm_providers[provider_id])
-    prompt_dir = config.repo_root / "resources" / "prompts"
-    if provider.kind == "openai_text":
-        return NoticeSummarizer(
-            prompt_dir=prompt_dir,
-            prompt_name=config.prompt_name,
-            model=provider.model,
-            api_key=provider.api_key,
-            base_url=provider.base_url,
-            timeout=profile.llm_timeout,
-            max_retries=profile.llm_max_retries,
-            initial_retry_delay=profile.llm_initial_retry_delay,
-            retry_backoff=profile.llm_retry_backoff,
-            summary_format_repair_retries=config.summary_format_repair_retries,
-        )
-    if provider.kind == "kimi_multimodal":
-        return KimiMultimodalSummarizer(
-            prompt_dir=prompt_dir,
-            prompt_name=config.prompt_name,
-            model=provider.model,
-            api_key=provider.api_key,
-            base_url=provider.base_url,
-            http_client=http_client,
-            timeout=profile.llm_timeout,
-            max_retries=profile.llm_max_retries,
-            initial_retry_delay=profile.llm_initial_retry_delay,
-            retry_backoff=profile.llm_retry_backoff,
-            media_policy=config.media_policy,
-            summary_format_repair_retries=config.summary_format_repair_retries,
-        )
-    raise ValueError(f"unsupported LLM provider kind for '{provider_id}': {provider.kind}")
-
 
 def run_source_audit(config: AppConfig, profile: NoticeRuntimeProfile, source_ids: tuple[str, ...]):
     detail_parser = build_detail_parser(config)

@@ -18,6 +18,7 @@ COUNT_KEYS = (
     "audit_warning_count",
     "refresh_seen_error_count",
 )
+FAILURE_SNAPSHOT_BRANCH = "bot/failure-snapshots"
 
 
 def _manifest(args) -> dict[str, object]:
@@ -50,7 +51,7 @@ def _manifest(args) -> dict[str, object]:
 def _write_outputs(path: Path, manifest: dict[str, object], *, prefix: str) -> None:
     counts = manifest["counts"]
     assert isinstance(counts, dict)
-    lines = {
+    outputs = {
         "publication_status": "blocked",
         "publication_blockers": ",".join(manifest["publication_blockers"]),
         "master_state_updated": str(manifest["master_state_updated"]).lower(),
@@ -63,12 +64,14 @@ def _write_outputs(path: Path, manifest: dict[str, object], *, prefix: str) -> N
         **{key: str(counts[key]) for key in COUNT_KEYS},
     }
     with path.open("a", encoding="utf-8") as stream:
-        for key, value in lines.items():
+        for key, value in outputs.items():
             stream.write(f"{prefix}{key}={value}\n")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Write a minimal blocked publication manifest for workflow recovery.")
+    parser = argparse.ArgumentParser(
+        description="Write a minimal blocked publication manifest for workflow recovery."
+    )
     parser.add_argument("--report-date", required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--workflow-url", required=True)
@@ -76,7 +79,7 @@ def main() -> int:
     parser.add_argument("--git-sha", required=True)
     parser.add_argument("--blocker", required=True)
     parser.add_argument("--master-state-updated", choices=("true", "false"), default="false")
-    parser.add_argument("--failure-snapshot-branch", default="bot/failure-snapshots")
+    parser.add_argument("--failure-snapshot-branch", default=FAILURE_SNAPSHOT_BRANCH)
     parser.add_argument("--output-prefix", default="")
     parser.add_argument("--publication-json", type=Path, required=True)
     parser.add_argument("--github-output", type=Path, default=None)
@@ -84,7 +87,10 @@ def main() -> int:
 
     manifest = _manifest(args)
     args.publication_json.parent.mkdir(parents=True, exist_ok=True)
-    args.publication_json.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    args.publication_json.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     github_output = os.environ.get("GITHUB_OUTPUT", "")
     output_path = args.github_output or (Path(github_output) if github_output else None)
     if output_path:

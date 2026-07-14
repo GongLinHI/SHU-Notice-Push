@@ -35,6 +35,6 @@ class SourceAuditResult:
 
 @dataclass(frozen=True)
 class AuditPolicy:
-    min_list_items: int = 1
-    sample_detail_count: int = 3
-    required_content_kinds: tuple[str, ...] = ("text", "pdf", "image")
+    min_list_items: int
+    sample_detail_count: int
+    required_content_kinds: tuple[str, ...]

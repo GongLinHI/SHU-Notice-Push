@@ -5,9 +5,17 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -18,6 +26,6 @@ jobs:
       - run: python -m notice_push --doctor --state-path "$RUNNER_TEMP/ci-state.sqlite3"
       - name: Prepare pytest temp directory
         run: mkdir -p .tmp
-      - run: pytest tests/notice_push/test_cli.py tests/notice_push/test_sources.py -q
       - run: pytest -q
-      - run: python -m compileall -q notice_push
+      - run: python -m compileall -q notice_push scripts
+      - run: git diff --check

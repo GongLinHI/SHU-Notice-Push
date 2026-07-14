@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 from datetime import date
 from pathlib import Path
@@ -32,7 +31,9 @@ def main() -> int:
     parser.add_argument("--github-output", type=Path, default=None)
     args = parser.parse_args()
 
-    publication = PublicationManifest.from_json(json.loads(args.publication_json.read_text(encoding="utf-8")))
+    publication = PublicationManifest.from_json_text(
+        args.publication_json.read_text(encoding="utf-8")
+    )
     secrets = tuple(os.getenv(name, "") for name in args.secret_env)
     snapshot_path = build_failure_snapshot(
         FailureSnapshotContext(
