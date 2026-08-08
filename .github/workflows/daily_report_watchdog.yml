@@ -1,0 +1,101 @@
+name: Daily Report Watchdog
+
+on:
+  schedule:
+    - cron: '0 22 * * *' # 每天 UTC 22:00，即北京时间 6:00
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: daily-report-watchdog
+  cancel-in-progress: true
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PIP_NO_INPUT: "1"
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: Ubuntu-Python
+
+    steps:
+      - name: Checkout watchdog code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Evaluate daily heartbeat
+        id: heartbeat
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LOOKBACK_HOURS: ${{ github.event_name == 'schedule' && '8' || '30' }}
+        run: |
+          python -m scripts.workflow.evaluate_daily_heartbeat \
+            --repository "$GITHUB_REPOSITORY" \
+            --api-url "$GITHUB_API_URL" \
+            --lookback-hours "$LOOKBACK_HOURS" \
+            --stalled-after-minutes 180 \
+            --decision-json "$RUNNER_TEMP/watchdog-decision.json" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Build watchdog snapshot
+        id: build_snapshot
+        if: steps.heartbeat.outputs.alert_required == 'true'
+        run: |
+          python -m scripts.workflow.prepare_monitor_snapshot \
+            --snapshot-root "$RUNNER_TEMP/watchdog-snapshot" \
+            --decision-json "$RUNNER_TEMP/watchdog-decision.json" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Upload watchdog snapshot
+        id: upload_snapshot
+        if: steps.heartbeat.outputs.alert_required == 'true'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: notice-watchdog-snapshot-${{ steps.heartbeat.outputs.report_date }}-${{ steps.heartbeat.outputs.source_run_key }}
+          path: ${{ steps.build_snapshot.outputs.snapshot_directory }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Render watchdog alert
+        id: render_alert
+        if: always() && steps.heartbeat.outputs.alert_required == 'true'
+        env:
+          SNAPSHOT_ARTIFACT_STATUS: ${{ steps.upload_snapshot.outcome }}
+        run: |
+          python -m scripts.workflow.render_monitor_alert \
+            --decision-json "$RUNNER_TEMP/watchdog-decision.json" \
+            --snapshot-push-status "artifact_${SNAPSHOT_ARTIFACT_STATUS:-failed}" \
+            --output "$RUNNER_TEMP/watchdog-alert.html"
+          echo "alert_path=$RUNNER_TEMP/watchdog-alert.html" >> "$GITHUB_OUTPUT"
+
+      - name: Send watchdog alert email
+        if: always() && steps.heartbeat.outputs.alert_required == 'true' && steps.render_alert.outcome == 'success'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.MAIL_SERVER_ADDRESS }}
+          server_port: ${{ secrets.MAIL_SERVER_PORT }}
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: ${{ steps.heartbeat.outputs.alert_subject }}
+          to: ${{ secrets.MAIL_TO }}
+          from: ${{ secrets.MAIL_USERNAME }}
+          html_body: file://${{ steps.render_alert.outputs.alert_path }}

@@ -1,0 +1,162 @@
+name: Daily Report Monitor
+
+run-name: 监控日报 run-${{ github.event.workflow_run.id }}-attempt-${{ github.event.workflow_run.run_attempt }}
+
+on:
+  workflow_run:
+    workflows: [Daily Report]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: daily-report-monitor-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
+  cancel-in-progress: false
+
+env:
+  FAILURE_SNAPSHOT_BRANCH: bot/failure-snapshots
+  FAILURE_SNAPSHOT_RETENTION_DAYS: "90"
+  FAILURE_SNAPSHOT_MAX_SCAN_ENTRIES: "200"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PIP_NO_INPUT: "1"
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  monitor-failure:
+    if: >-
+      github.event.workflow_run.conclusion != 'success' &&
+      github.event.workflow_run.head_branch == github.event.repository.default_branch &&
+      (github.event.workflow_run.event == 'schedule' || github.event.workflow_run.event == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: Ubuntu-Python
+
+    steps:
+      - name: Checkout monitor code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Download publication manifest
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+          pattern: notice-publication-*
+          path: ${{ runner.temp }}/source-artifacts
+          merge-multiple: true
+
+      - name: Download failure evidence
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+          pattern: notice-failure-snapshot-*
+          path: ${{ runner.temp }}/source-artifacts
+          merge-multiple: true
+
+      - name: Classify completed run
+        id: classify
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python -m scripts.workflow.evaluate_workflow_run \
+            --event-json "$GITHUB_EVENT_PATH" \
+            --repository "$GITHUB_REPOSITORY" \
+            --api-url "$GITHUB_API_URL" \
+            --artifacts-root "$RUNNER_TEMP/source-artifacts" \
+            --context-json "$RUNNER_TEMP/source-run-context.json" \
+            --decision-json "$RUNNER_TEMP/monitor-decision.json" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Build monitor snapshot
+        id: build_snapshot
+        if: steps.classify.outputs.snapshot_required == 'true'
+        run: |
+          python -m scripts.workflow.prepare_monitor_snapshot \
+            --snapshot-root "$RUNNER_TEMP/monitor-snapshot" \
+            --decision-json "$RUNNER_TEMP/monitor-decision.json" \
+            --evidence-root "$RUNNER_TEMP/source-artifacts" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Upload monitor snapshot
+        if: steps.classify.outputs.snapshot_required == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: notice-monitor-snapshot-${{ steps.classify.outputs.report_date }}-${{ steps.classify.outputs.source_run_key }}
+          path: ${{ steps.build_snapshot.outputs.snapshot_directory }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Checkout failure snapshot branch workspace
+        id: checkout_snapshot
+        if: steps.classify.outputs.snapshot_required == 'true'
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          path: .failure-snapshot-repo
+          fetch-depth: 0
+
+      - name: Publish failure snapshot
+        id: publish_snapshot
+        if: steps.classify.outputs.snapshot_required == 'true' && steps.checkout_snapshot.outcome == 'success'
+        continue-on-error: true
+        run: |
+          python -m scripts.workflow.publish_monitor_snapshot \
+            --checkout "$GITHUB_WORKSPACE/.failure-snapshot-repo" \
+            --source-snapshot "${{ steps.build_snapshot.outputs.snapshot_directory }}" \
+            --decision-json "$RUNNER_TEMP/monitor-decision.json" \
+            --branch "$FAILURE_SNAPSHOT_BRANCH" \
+            --retention-days "$FAILURE_SNAPSHOT_RETENTION_DAYS" \
+            --max-scan-entries "$FAILURE_SNAPSHOT_MAX_SCAN_ENTRIES" \
+            --result-json "$RUNNER_TEMP/snapshot-publication.json" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Render operational alert
+        id: render_alert
+        if: always() && steps.classify.outputs.alert_required == 'true'
+        env:
+          SNAPSHOT_PUSH_STATUS: ${{ steps.publish_snapshot.outputs.status }}
+        run: |
+          python -m scripts.workflow.render_monitor_alert \
+            --decision-json "$RUNNER_TEMP/monitor-decision.json" \
+            --snapshot-push-status "${SNAPSHOT_PUSH_STATUS:-failed}" \
+            --output "$RUNNER_TEMP/notice-alert.html"
+          echo "alert_path=$RUNNER_TEMP/notice-alert.html" >> "$GITHUB_OUTPUT"
+
+      - name: Send operational alert email
+        if: always() && steps.classify.outputs.alert_required == 'true' && steps.render_alert.outcome == 'success'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.MAIL_SERVER_ADDRESS }}
+          server_port: ${{ secrets.MAIL_SERVER_PORT }}
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: ${{ steps.classify.outputs.alert_subject }}
+          to: ${{ secrets.MAIL_TO }}
+          from: ${{ secrets.MAIL_USERNAME }}
+          html_body: file://${{ steps.render_alert.outputs.alert_path }}
+
+      - name: Report incomplete monitoring
+        if: >-
+          always() && steps.classify.outputs.alert_required == 'true' &&
+          (steps.publish_snapshot.outputs.status != 'succeeded' || steps.render_alert.outcome != 'success')
+        run: |
+          echo "::error::异常已分类，但快照发布或告警渲染未完整完成。"
+          exit 1

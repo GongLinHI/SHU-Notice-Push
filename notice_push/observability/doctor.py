@@ -52,7 +52,12 @@ def _check_runtime_config(config: AppConfig, findings: list[str]) -> None:
 
 def _check_workflow_yaml(config: AppConfig, findings: list[str]) -> None:
     workflow_dir = config.repo_root / ".github" / "workflows"
-    for workflow_name in ("daily_report.yml", "ci.yml"):
+    for workflow_name in (
+        "daily_report.yml",
+        "daily_report_monitor.yml",
+        "daily_report_watchdog.yml",
+        "ci.yml",
+    ):
         workflow_path = workflow_dir / workflow_name
         if not workflow_path.exists():
             findings.append(f"error: workflow file not found: {workflow_path}")

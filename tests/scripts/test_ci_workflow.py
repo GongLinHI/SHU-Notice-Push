@@ -129,10 +129,12 @@ def test_daily_report_workflow_does_not_publish_master_when_html_render_fails():
 
 def test_daily_report_workflow_distinguishes_email_failure_after_master_publish():
     workflow = Path(".github/workflows/daily_report.yml").read_text(encoding="utf-8")
+    classifier = Path("notice_push/observability/workflow_monitor.py").read_text(encoding="utf-8")
 
     assert "id: send_report_email" in workflow
-    assert "steps.send_report_email.outcome == 'failure'" in workflow
-    assert "正式数据已发布到 master，但日报邮件投递失败" in workflow
+    assert "Report daily email delivery failure" not in workflow
+    assert '"Send daily report email"' in classifier
+    assert "DAILY_EMAIL_FAILED" in classifier
 
 
 def test_daily_report_workflow_limits_business_shell_blocks():
@@ -149,12 +151,14 @@ def test_daily_report_workflow_limits_business_shell_blocks():
 
 def test_daily_report_git_publication_only_uses_python_helpers():
     workflow = Path(".github/workflows/daily_report.yml").read_text(encoding="utf-8")
+    monitor = Path(".github/workflows/daily_report_monitor.yml").read_text(encoding="utf-8")
 
     assert "git push" not in workflow
     assert "git commit" not in workflow
     assert "git add" not in workflow
     assert "python -m scripts.workflow.publish_master" in workflow
-    assert "python -m scripts.workflow.publish_failure_snapshot" in workflow
+    assert "python -m scripts.workflow.publish_failure_snapshot" not in workflow
+    assert "python -m scripts.workflow.publish_monitor_snapshot" in monitor
 
 
 def test_blocked_workflow_paths_only_use_final_publication_outputs():
@@ -168,22 +172,23 @@ def test_blocked_workflow_paths_only_use_final_publication_outputs():
 
 def test_daily_report_workflow_isolates_blocked_runs_from_master_and_preserves_snapshots():
     workflow = Path(".github/workflows/daily_report.yml").read_text(encoding="utf-8")
+    monitor = Path(".github/workflows/daily_report_monitor.yml").read_text(encoding="utf-8")
 
     assert "bot/failure-snapshots" in workflow
     assert "if: always() && steps.publication.outputs.publication_status == 'blocked'" in workflow
     assert "notice-failure-snapshot-${{ steps.date.outputs.date }}-${{ env.NOTICE_RUN_KEY }}" in workflow
-    assert "path: .failure-snapshot-repo" in workflow
-    helper = Path("scripts/workflow/publish_failure_snapshot.py").read_text(encoding="utf-8")
-    assert "python -m scripts.workflow.publish_failure_snapshot" in workflow
+    assert "path: .failure-snapshot-repo" not in workflow
+    assert "path: .failure-snapshot-repo" in monitor
+    helper = Path("notice_push/observability/snapshot_publisher.py").read_text(encoding="utf-8")
+    assert "python -m scripts.workflow.publish_monitor_snapshot" in monitor
     assert '"add", "--", *add_paths' in helper
     assert '"add", "-A"' not in helper
     assert '"commit", "-am"' not in helper
     assert "git add -A" not in workflow
     assert "git commit -am" not in workflow
-    assert "set +e" not in workflow[workflow.index("- name: Push failure snapshot"):]
-    assert workflow.index("Upload failure snapshot") < workflow.index("Push failure snapshot")
-    assert workflow.index("Push failure snapshot") < workflow.index("Send operational alert email")
-    assert workflow.index("Send operational alert email") < workflow.index("Fail blocked publication")
+    assert workflow.index("Upload failure snapshot") < workflow.index("Fail blocked publication")
+    assert "Send operational alert email" not in workflow
+    assert monitor.index("Publish failure snapshot") < monitor.index("Send operational alert email")
     build_section = workflow[
         workflow.index("- name: Build failure snapshot") : workflow.index("- name: Upload failure snapshot")
     ]
@@ -192,7 +197,7 @@ def test_daily_report_workflow_isolates_blocked_runs_from_master_and_preserves_s
     assert "$GITHUB_WORKSPACE/" not in build_section
 
     upload_section = workflow[
-        workflow.index("- name: Upload failure snapshot") : workflow.index("- name: Checkout failure snapshot branch workspace")
+        workflow.index("- name: Upload failure snapshot") : workflow.index("- name: Fail blocked publication")
     ]
     assert "sanitized-notice_pipeline.log" in upload_section
     assert "${{ runner.temp }}/notice_pipeline.log" not in upload_section
@@ -202,8 +207,9 @@ def test_daily_report_reruns_use_unique_artifact_and_snapshot_keys():
     workflow = Path(".github/workflows/daily_report.yml").read_text(encoding="utf-8")
 
     assert 'NOTICE_RUN_KEY: "${{ github.run_id }}-attempt-${{ github.run_attempt }}"' in workflow
-    assert workflow.count('--run-id "$NOTICE_RUN_KEY"') == 6
+    assert workflow.count('--run-id "$NOTICE_RUN_KEY"') == 5
     assert "notice-state-before-run-${{ steps.date.outputs.date }}-${{ env.NOTICE_RUN_KEY }}" in workflow
     assert "notice-run-summary-${{ steps.date.outputs.date }}-${{ env.NOTICE_RUN_KEY }}" in workflow
+    assert "notice-publication-${{ steps.date.outputs.date }}-${{ env.NOTICE_RUN_KEY }}" in workflow
     assert "runs-on: ubuntu-24.04" in workflow
     assert "timeout-minutes: 60" in workflow

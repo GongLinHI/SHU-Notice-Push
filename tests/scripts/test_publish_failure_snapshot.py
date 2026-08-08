@@ -4,8 +4,8 @@ import subprocess
 from datetime import date
 from pathlib import Path
 
-import scripts.workflow.publish_failure_snapshot as publisher_module
-from scripts.workflow.publish_failure_snapshot import SnapshotPublishRequest, publish_failure_snapshot
+import notice_push.observability.snapshot_publisher as publisher_module
+from notice_push.observability.snapshot_publisher import SnapshotPublishRequest, publish_failure_snapshot
 
 
 def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -139,3 +139,23 @@ def test_publish_failure_snapshot_aborts_failed_rebase(monkeypatch, tmp_path):
     assert result.status == "failed"
     assert result.error == "git rebase after push failure failed"
     assert ("rebase", "--abort") in commands
+
+
+def test_publish_failure_snapshot_is_idempotent_for_same_monitor_decision(tmp_path):
+    checkout, _ = _checkout(tmp_path)
+    source = _source_snapshot(tmp_path)
+    (source / "monitor_decision.json").write_text('{"source_run_key":"123"}\n', encoding="utf-8")
+    request = _request(checkout, source)
+
+    assert publish_failure_snapshot(request).status == "succeeded"
+
+    retry_source = tmp_path / "retry-run-123"
+    retry_source.mkdir()
+    (retry_source / "monitor_decision.json").write_text(
+        '{"source_run_key":"123"}\n',
+        encoding="utf-8",
+    )
+    (retry_source / "notice_pipeline.log").write_text("retry", encoding="utf-8")
+    result = publish_failure_snapshot(_request(checkout, retry_source))
+
+    assert result.status == "succeeded"

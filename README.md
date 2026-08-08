@@ -11,8 +11,8 @@
 - **SQLite 状态管理**：记录已见通知、详情内容、摘要结果和失败重试状态，避免重复推送。
 - **双运行档位**：`daily` 用于日常增量运行，`backfill` 用于补历史或漏跑场景。
 - **可配置并发与重试**：详情抓取、LLM 摘要、HTTP 超时、失败重试都集中在 YAML 中管理。
-- **运行异常告警**：源站访问异常会单独发送运行告警邮件，不混入每日通知日报。
-- **严格发布与现场保留**：异常运行不会发布不完整日报，诊断现场会保存为 Artifact，并尝试写入隔离分支 `bot/failure-snapshots`。
+- **独立运行监控**：业务异常和 GitHub Runner、超时、取消等基础设施异常由独立 workflow 分类告警。
+- **严格发布与现场保留**：异常运行不会发布不完整日报，诊断现场会保存为 Artifact，并由监控 workflow 写入隔离分支 `bot/failure-snapshots`。
 
 ## 通知源
 
@@ -39,11 +39,11 @@
 本项目的 workflow 运行在 Ubuntu runner 上，并绑定了 GitHub Actions Environment：
 
 ```yaml
-runs-on: ubuntu-latest
+runs-on: ubuntu-24.04
 environment: Ubuntu-Python
 ```
 
-进入 `Settings` -> `Environments`，创建名为 `Ubuntu-Python` 的 environment。名称需要和 [.github/workflows/daily_report.yml](.github/workflows/daily_report.yml) 中保持一致。
+进入 `Settings` -> `Environments`，创建名为 `Ubuntu-Python` 的 environment。日报、独立监控和心跳巡检 workflow 都使用这个 environment。
 
 ### 3. 配置 Environment Secrets
 
@@ -79,17 +79,25 @@ environment: Ubuntu-Python
 3. 使用 `pandoc` 和 [resources/templates/daily_report.html](resources/templates/daily_report.html) 渲染 HTML 邮件。
 4. 先提交并推送更新后的 SQLite 状态库和 Markdown 日报，再完成最终发布判定。
 5. 只有远程正式状态更新成功后才发送每日通知邮件。
-6. 如果源站访问异常或 pipeline、渲染、Git 发布异常，保存诊断现场并发送单独的运行异常告警邮件。
+6. 主流程上传统一 publication manifest 和脱敏诊断现场；运行结束后，独立监控负责异常快照分支和告警邮件。
 
 没有新通知且没有需要人工复核的失败通知时，通常不会发送每日通知邮件；源站异常只会进入运行异常告警。
 
-正式发布采用严格模式：只有 `published` 和 `no_report` 状态可以更新 `master`。`blocked` 状态不会发送日报邮件，会上传诊断 Artifact、尝试推送异常快照，并最终让 workflow 以失败状态结束。若 `master` 已成功更新但后续收尾失败，告警会明确保留 `master_state_updated=true` 这一事实。
+正式发布采用严格模式：只有 `published` 和 `no_report` 状态可以更新 `master`。`blocked` 状态不会发送日报邮件，会上传诊断 Artifact，并最终让主 workflow 以失败状态结束。随后 `Daily Report Monitor` 读取运行元数据和 Artifact，分类异常、推送快照并发送告警。
+
+监控分为三层：
+
+- `Daily Report`：负责业务执行和发布前质量门禁。
+- `Daily Report Monitor`：通过 `workflow_run` 处理业务阻断、邮件失败、Runner 未分配、超时和取消等异常。
+- `Daily Report Watchdog`：每天北京时间 6:00 检查定时日报是否出现、是否长时间未完成，以及失败运行是否已被独立监控处理。
 
 Artifact 默认保留时间：
 
 - 运行前 SQLite 备份：14 天。
 - run summary JSON：30 天。
+- publication manifest：30 天。
 - 异常快照 Artifact：30 天。
+- 心跳异常快照 Artifact：30 天。
 - `bot/failure-snapshots` 分支中的异常目录：保留 90 天，由后续异常运行按扫描上限清理。
 
 ## 配置

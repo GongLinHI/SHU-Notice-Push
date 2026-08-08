@@ -14,8 +14,6 @@ permissions:
 
 env:
   FAILURE_SNAPSHOT_BRANCH: bot/failure-snapshots
-  FAILURE_SNAPSHOT_RETENTION_DAYS: "90"
-  FAILURE_SNAPSHOT_MAX_SCAN_ENTRIES: "200"
   FAILURE_SNAPSHOT_ARTIFACT_RETENTION_DAYS: "30"
   NOTICE_RUN_KEY: "${{ github.run_id }}-attempt-${{ github.run_attempt }}"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
@@ -195,6 +193,15 @@ jobs:
               --github-output "$GITHUB_OUTPUT"
           fi
 
+      - name: Upload publication manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: notice-publication-${{ steps.date.outputs.date }}-${{ env.NOTICE_RUN_KEY }}
+          path: ${{ runner.temp }}/publication.json
+          if-no-files-found: warn
+          retention-days: 30
+
       - name: Send daily report email
         id: send_report_email
         if: steps.publication.outputs.publication_status == 'published'
@@ -209,10 +216,6 @@ jobs:
           to: ${{ secrets.MAIL_TO }}
           from: ${{ secrets.MAIL_USERNAME }}
           html_body: file://resources/results/html/${{ steps.date.outputs.date }}.html
-
-      - name: Report daily email delivery failure
-        if: always() && steps.publication.outputs.publication_status == 'published' && steps.send_report_email.outcome == 'failure'
-        run: echo "::error::正式数据已发布到 master，但日报邮件投递失败。"
 
       - name: Sanitize failure pipeline log
         if: always() && steps.publication.outputs.publication_status == 'blocked'
@@ -265,65 +268,6 @@ jobs:
             ${{ runner.temp }}/sanitized-notice_pipeline.log
           if-no-files-found: warn
           retention-days: ${{ fromJSON(env.FAILURE_SNAPSHOT_ARTIFACT_RETENTION_DAYS) }}
-
-      - name: Checkout failure snapshot branch workspace
-        id: checkout_failure_snapshot
-        if: always() && steps.publication.outputs.publication_status == 'blocked'
-        continue-on-error: true
-        uses: actions/checkout@v4
-        with:
-          path: .failure-snapshot-repo
-          fetch-depth: 0
-
-      - name: Push failure snapshot
-        id: push_failure_snapshot
-        if: always() && steps.publication.outputs.publication_status == 'blocked' && steps.build_failure_snapshot.outcome == 'success' && steps.checkout_failure_snapshot.outcome == 'success'
-        continue-on-error: true
-        run: |
-          python -m scripts.workflow.publish_failure_snapshot \
-            --checkout "$GITHUB_WORKSPACE/.failure-snapshot-repo" \
-            --source-snapshot "${{ steps.build_failure_snapshot.outputs.snapshot_directory }}" \
-            --branch "$FAILURE_SNAPSHOT_BRANCH" \
-            --report-date "${{ steps.date.outputs.date }}" \
-            --run-id "$NOTICE_RUN_KEY" \
-            --retention-days "$FAILURE_SNAPSHOT_RETENTION_DAYS" \
-            --max-scan-entries "$FAILURE_SNAPSHOT_MAX_SCAN_ENTRIES" \
-            --pipeline-exit-code "${{ steps.publication.outputs.pipeline_exit_code }}" \
-            --source-error-count "${{ steps.publication.outputs.source_error_count }}" \
-            --audit-error-count "${{ steps.publication.outputs.audit_error_count }}" \
-            --artifact-name "${{ steps.publication.outputs.artifact_name }}" \
-            --publication-blockers "${{ steps.publication.outputs.publication_blockers }}" \
-            --result-json "$RUNNER_TEMP/failure-snapshot-publish.json" \
-            --github-output "$GITHUB_OUTPUT"
-
-      - name: Prepare operational alert email
-        id: prepare_alert
-        if: always() && steps.publication.outputs.publication_status == 'blocked'
-        run: |
-          snapshot_directory="${{ steps.build_failure_snapshot.outputs.snapshot_directory }}"
-          snapshot_status="${{ steps.push_failure_snapshot.outputs.status }}"
-          python -m scripts.workflow.render_failure_alert \
-            --snapshot-directory "$snapshot_directory" \
-            --publication-json "$RUNNER_TEMP/publication.json" \
-            --run-summary-path "$GITHUB_WORKSPACE/${{ steps.publication.outputs.run_summary_path }}" \
-            --snapshot-push-status "${snapshot_status:-failed}" \
-            --output "$RUNNER_TEMP/notice_alert.html"
-          echo "alert_path=$RUNNER_TEMP/notice_alert.html" >> "$GITHUB_OUTPUT"
-
-      - name: Send operational alert email
-        if: always() && steps.publication.outputs.publication_status == 'blocked'
-        continue-on-error: true
-        uses: dawidd6/action-send-mail@v3
-        with:
-          server_address: ${{ secrets.MAIL_SERVER_ADDRESS }}
-          server_port: ${{ secrets.MAIL_SERVER_PORT }}
-          secure: true
-          username: ${{ secrets.MAIL_USERNAME }}
-          password: ${{ secrets.MAIL_PASSWORD }}
-          subject: '上海大学通知推送运行异常 - ${{ steps.date.outputs.date }} - 源站异常 ${{ steps.publication.outputs.source_error_count }} 个 - 巡检异常 ${{ steps.publication.outputs.audit_error_count }} 个'
-          to: ${{ secrets.MAIL_TO }}
-          from: ${{ secrets.MAIL_USERNAME }}
-          html_body: file://${{ steps.prepare_alert.outputs.alert_path }}
 
       - name: Fail blocked publication
         if: always() && steps.publication.outputs.publication_status == 'blocked'

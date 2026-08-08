@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -11,6 +10,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, StrictBool, StrictStr
 
 from notice_push.observability.failure_snapshot import cleanup_expired_snapshot_dates
+from notice_push.observability.workflow_monitor import MonitorFailureType, failure_type_label
 
 
 SnapshotPublishStatus = Literal["succeeded", "failed"]
@@ -25,11 +25,12 @@ class SnapshotPublishRequest:
     run_id: str
     retention_days: int
     max_scan_entries: int
-    pipeline_exit_code: int
-    source_error_count: int
-    audit_error_count: int
+    pipeline_exit_code: int | None
+    source_error_count: int | None
+    audit_error_count: int | None
     artifact_name: str
     blockers: tuple[str, ...]
+    failure_type: str = MonitorFailureType.BUSINESS_BLOCKED.value
 
 
 class SnapshotPublishResult(BaseModel):
@@ -44,8 +45,11 @@ def publish_failure_snapshot(request: SnapshotPublishRequest) -> SnapshotPublish
     checkout = Path(request.checkout).resolve()
     source_snapshot = Path(request.source_snapshot).resolve()
     if not checkout.is_dir() or not source_snapshot.is_dir():
-        return SnapshotPublishResult(status="failed", error="checkout or source snapshot directory is missing")
-    for command in (("config", "user.name", "github-actions[bot]"), ("config", "user.email", "github-actions[bot]@users.noreply.github.com")):
+        return _failure("checkout or source snapshot directory is missing")
+    for command in (
+        ("config", "user.name", "github-actions[bot]"),
+        ("config", "user.email", "github-actions[bot]@users.noreply.github.com"),
+    ):
         if not _git(checkout, *command).success:
             return _failure("git configuration failed")
     branch_result = _checkout_snapshot_branch(checkout, request.branch)
@@ -55,6 +59,8 @@ def publish_failure_snapshot(request: SnapshotPublishRequest) -> SnapshotPublish
     relative_target = Path("failure-snapshots") / request.report_date.isoformat() / f"run-{request.run_id}"
     target = checkout / relative_target
     if target.exists():
+        if _same_monitor_decision(source_snapshot, target):
+            return SnapshotPublishResult(status="succeeded")
         return _failure("snapshot target already exists")
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(source_snapshot, target)
@@ -71,19 +77,7 @@ def publish_failure_snapshot(request: SnapshotPublishRequest) -> SnapshotPublish
     if _git(checkout, "diff", "--cached", "--quiet").returncode == 0:
         return _failure("failure snapshot staging is empty", cleanup.limit_exceeded)
 
-    subject = (
-        f"异常快照 {request.report_date.isoformat()}: 源站异常 {request.source_error_count} "
-        f"巡检异常 {request.audit_error_count} [bot]"
-    )
-    body = "\n".join(
-        (
-            f"运行 ID: {request.run_id}",
-            f"退出码: {request.pipeline_exit_code}",
-            f"阻断原因: {','.join(request.blockers)}",
-            f"Artifact: {request.artifact_name}",
-        )
-    )
-    if not _git(checkout, "commit", "-m", subject, "-m", body).success:
+    if not _git(checkout, "commit", "-m", _commit_subject(request), "-m", _commit_body(request)).success:
         return _failure("git commit failed", cleanup.limit_exceeded)
     first_push = _git(checkout, "push", "origin", f"HEAD:{request.branch}")
     if first_push.success:
@@ -121,6 +115,49 @@ def _checkout_snapshot_branch(checkout: Path, branch: str) -> SnapshotPublishRes
     return None
 
 
+def _same_monitor_decision(source: Path, target: Path) -> bool:
+    source_decision = source / "monitor_decision.json"
+    target_decision = target / "monitor_decision.json"
+    return (
+        source_decision.is_file()
+        and target_decision.is_file()
+        and source_decision.read_bytes() == target_decision.read_bytes()
+    )
+
+
+def _commit_subject(request: SnapshotPublishRequest) -> str:
+    if (
+        request.failure_type == MonitorFailureType.BUSINESS_BLOCKED.value
+        and request.source_error_count is not None
+        and request.audit_error_count is not None
+    ):
+        return (
+            f"异常快照 {request.report_date.isoformat()}: 源站异常 {request.source_error_count} "
+            f"巡检异常 {request.audit_error_count} [bot]"
+        )
+    try:
+        label = failure_type_label(MonitorFailureType(request.failure_type))
+    except ValueError:
+        label = request.failure_type or "未知异常"
+    return f"异常快照 {request.report_date.isoformat()}: {label} [bot]"
+
+
+def _commit_body(request: SnapshotPublishRequest) -> str:
+    return "\n".join(
+        (
+            f"运行 ID: {request.run_id}",
+            f"异常类型: {request.failure_type}",
+            f"退出码: {_display_optional_count(request.pipeline_exit_code)}",
+            f"阻断原因: {','.join(request.blockers)}",
+            f"Artifact: {request.artifact_name}",
+        )
+    )
+
+
+def _display_optional_count(value: int | None) -> str:
+    return str(value) if value is not None else "不可用"
+
+
 @dataclass(frozen=True)
 class _GitResult:
     returncode: int
@@ -144,65 +181,8 @@ def _git(checkout: Path, *args: str) -> _GitResult:
 
 
 def _failure(error: str, cleanup_limit_exceeded: bool = False) -> SnapshotPublishResult:
-    return SnapshotPublishResult(status="failed", error=error, cleanup_limit_exceeded=cleanup_limit_exceeded)
-
-
-def _write_github_output(path: Path | None, result: SnapshotPublishResult) -> None:
-    if path is None:
-        return
-    with path.open("a", encoding="utf-8") as stream:
-        stream.write(f"status={result.status}\n")
-        stream.write(f"cleanup_limit_exceeded={str(result.cleanup_limit_exceeded).lower()}\n")
-        stream.write(f"error={result.error}\n")
-
-
-def _write_result_json(path: Path, result: SnapshotPublishResult) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(result.model_dump_json(indent=2) + "\n", encoding="utf-8")
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Publish one diagnostic failure snapshot to its isolated branch.")
-    parser.add_argument("--checkout", type=Path, required=True)
-    parser.add_argument("--source-snapshot", type=Path, required=True)
-    parser.add_argument("--branch", required=True)
-    parser.add_argument("--report-date", required=True)
-    parser.add_argument("--run-id", required=True)
-    parser.add_argument("--retention-days", type=int, required=True)
-    parser.add_argument("--max-scan-entries", type=int, required=True)
-    parser.add_argument("--pipeline-exit-code", type=int, required=True)
-    parser.add_argument("--source-error-count", type=int, required=True)
-    parser.add_argument("--audit-error-count", type=int, required=True)
-    parser.add_argument("--artifact-name", required=True)
-    parser.add_argument("--publication-blockers", default="")
-    parser.add_argument("--result-json", type=Path, required=True)
-    parser.add_argument("--github-output", type=Path, default=None)
-    args = parser.parse_args()
-
-    result = publish_failure_snapshot(
-        SnapshotPublishRequest(
-            checkout=args.checkout,
-            source_snapshot=args.source_snapshot,
-            branch=args.branch,
-            report_date=date.fromisoformat(args.report_date),
-            run_id=args.run_id,
-            retention_days=args.retention_days,
-            max_scan_entries=args.max_scan_entries,
-            pipeline_exit_code=args.pipeline_exit_code,
-            source_error_count=args.source_error_count,
-            audit_error_count=args.audit_error_count,
-            artifact_name=args.artifact_name,
-            blockers=tuple(value for value in args.publication_blockers.split(",") if value),
-        )
+    return SnapshotPublishResult(
+        status="failed",
+        error=error,
+        cleanup_limit_exceeded=cleanup_limit_exceeded,
     )
-    _write_result_json(args.result_json, result)
-    if result.cleanup_limit_exceeded:
-        print(
-            "warning: failure snapshot retention cleanup was skipped because the scan limit was exceeded"
-        )
-    _write_github_output(args.github_output, result)
-    return 0 if result.status == "succeeded" else 1
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
