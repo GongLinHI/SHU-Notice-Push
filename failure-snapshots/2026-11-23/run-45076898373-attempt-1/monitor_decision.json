@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "status": "alert",
+  "failure_type": "business_blocked",
+  "alert_required": true,
+  "snapshot_required": true,
+  "report_date": "2026-11-23",
+  "source_workflow_name": "Daily Report",
+  "source_run_id": 45076898373,
+  "source_run_attempt": 1,
+  "source_run_key": "45076898373-attempt-1",
+  "source_event": "schedule",
+  "source_conclusion": "failure",
+  "source_url": "https://github.com/GongLinHI/SHU-Notice-Push/actions/runs/45076898373",
+  "head_sha": "16e3d6359d4cde66cec040c8b4314721d2634447",
+  "summary": "业务运行被质量门禁阻断，GitHub 未提供额外注解。",
+  "blockers": [
+    "source_error_count=2",
+    "audit_error_count=2"
+  ],
+  "pipeline_exit_code": 1,
+  "publication_status": "blocked",
+  "counts": {
+    "new_count": 0,
+    "updated_count": 0,
+    "retried_count": 0,
+    "summarized_count": 0,
+    "failed_count": 0,
+    "manual_review_count": 0,
+    "source_error_count": 2,
+    "audit_error_count": 2,
+    "audit_warning_count": 2,
+    "refresh_seen_error_count": 0
+  },
+  "evidence_available": true
+}

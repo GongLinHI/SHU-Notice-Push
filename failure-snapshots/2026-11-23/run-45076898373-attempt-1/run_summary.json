@@ -1,0 +1,103 @@
+{
+  "schema_version": 2,
+  "report_date": "2026-11-23",
+  "new_count": 0,
+  "updated_count": 0,
+  "retried_count": 0,
+  "summarized_count": 0,
+  "manual_review_count": 0,
+  "failed_count": 0,
+  "source_error_count": 2,
+  "audit_error_count": 2,
+  "audit_warning_count": 2,
+  "refresh_seen_error_count": 0,
+  "publication_eligibility": "blocked",
+  "publication_blockers": [
+    "source_error_count=2",
+    "audit_error_count=2"
+  ],
+  "started_at": "2026-11-22T22:17:55+00:00",
+  "finished_at": "2026-11-22T22:20:48+00:00",
+  "duration_seconds": 173.122,
+  "git_sha": "16e3d6359d4cde66cec040c8b4314721d2634447",
+  "failure_types": {},
+  "source_errors": [
+    {
+      "source_id": "management_school",
+      "source_name": "上海大学管理学院",
+      "url": "https://ms.shu.edu.cn/syzl/zytz.htm",
+      "reason": "HTTPSConnectionPool(host='ms.shu.edu.cn', port=443): Max retries exceeded with url: /syzl/zytz.htm (Caused by NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7f85222979e0>: Failed to establish a new connection: [Errno 101] Network is unreachable'))"
+    },
+    {
+      "source_id": "graduate_school",
+      "source_name": "上海大学研究生院",
+      "url": "https://gs.shu.edu.cn/xwlb/sy.htm",
+      "reason": "HTTPSConnectionPool(host='gs.shu.edu.cn', port=443): Max retries exceeded with url: /xwlb/sy.htm (Caused by NameResolutionError(\"<urllib3.connection.HTTPSConnection object at 0x7f8522297da0>: Failed to resolve 'gs.shu.edu.cn' ([Errno -3] Temporary failure in name resolution)\"))"
+    }
+  ],
+  "audit_issues": [
+    {
+      "source_id": "shu_official",
+      "source_name": "上海大学官网",
+      "url": "https://www.shu.edu.cn/info/1051/403405.htm",
+      "reason": "HTTPSConnectionPool(host='www.shu.edu.cn', port=443): Max retries exceeded with url: /info/1051/403405.htm (Caused by NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7f85222d3260>: Failed to establish a new connection: [Errno 101] Network is unreachable'))",
+      "severity": "warning"
+    },
+    {
+      "source_id": "shu_official",
+      "source_name": "上海大学官网",
+      "url": "https://www.shu.edu.cn/info/1051/402935.htm",
+      "reason": "HTTPSConnectionPool(host='www.shu.edu.cn', port=443): Read timed out. (read timeout=12)",
+      "severity": "warning"
+    },
+    {
+      "source_id": "management_school",
+      "source_name": "上海大学管理学院",
+      "url": "https://ms.shu.edu.cn/syzl/zytz.htm",
+      "reason": "HTTPSConnectionPool(host='ms.shu.edu.cn', port=443): Max retries exceeded with url: /syzl/zytz.htm (Caused by NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7f85223405c0>: Failed to establish a new connection: [Errno 101] Network is unreachable'))",
+      "severity": "error"
+    },
+    {
+      "source_id": "graduate_school",
+      "source_name": "上海大学研究生院",
+      "url": "https://gs.shu.edu.cn/xwlb/sy.htm",
+      "reason": "HTTPSConnectionPool(host='gs.shu.edu.cn', port=443): Max retries exceeded with url: /xwlb/sy.htm (Caused by NameResolutionError(\"<urllib3.connection.HTTPSConnection object at 0x7f85222d30e0>: Failed to resolve 'gs.shu.edu.cn' ([Errno -3] Temporary failure in name resolution)\"))",
+      "severity": "error"
+    }
+  ],
+  "models": [],
+  "media_counts": {},
+  "sources": [
+    {
+      "source_id": "shu_official",
+      "source_name": "上海大学官网",
+      "summarized_count": 0,
+      "failed_count": 0,
+      "source_error_count": 0,
+      "audit_error_count": 0,
+      "audit_warning_count": 2,
+      "refresh_seen_error_count": 0
+    },
+    {
+      "source_id": "management_school",
+      "source_name": "上海大学管理学院",
+      "summarized_count": 0,
+      "failed_count": 0,
+      "source_error_count": 1,
+      "audit_error_count": 1,
+      "audit_warning_count": 0,
+      "refresh_seen_error_count": 0
+    },
+    {
+      "source_id": "graduate_school",
+      "source_name": "上海大学研究生院",
+      "summarized_count": 0,
+      "failed_count": 0,
+      "source_error_count": 1,
+      "audit_error_count": 1,
+      "audit_warning_count": 0,
+      "refresh_seen_error_count": 0
+    }
+  ],
+  "report_path": ""
+}
