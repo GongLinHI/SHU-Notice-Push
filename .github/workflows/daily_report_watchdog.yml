@@ -44,7 +44,7 @@ jobs:
         id: heartbeat
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          LOOKBACK_HOURS: ${{ github.event_name == 'schedule' && '8' || '30' }}
+          LOOKBACK_HOURS: ${{ github.event_name == 'schedule' && '24' || '30' }}
         run: |
           python -m scripts.workflow.evaluate_daily_heartbeat \
             --repository "$GITHUB_REPOSITORY" \
