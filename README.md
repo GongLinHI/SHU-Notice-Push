@@ -52,7 +52,7 @@ environment: Ubuntu-Python
 | Secret | 用途 |
 | --- | --- |
 | `DEEPSEEK_API_KEY` | DeepSeek API Key，用于文本通知摘要 |
-| `DEEPSEEK_MODEL` | 可选，文本摘要模型名，默认 `deepseek-v4-flash` |
+| `DEEPSEEK_MODEL` | 可选，文本摘要模型名，默认 `deepseek-flash` |
 | `KIMI_API_KEY` | 可选但推荐，Kimi API Key；仅在需要摘要 PDF 或图片正文时使用 |
 | `KIMI_MODEL` | 可选，多模态摘要模型名，默认 `kimi-k2.7-code` |
 | `MAIL_SERVER_ADDRESS` | SMTP 服务器 |
@@ -118,7 +118,7 @@ Artifact 默认保留时间：
 llm:
   providers:
     deepseek:
-      default_model: deepseek-v4-flash
+      default_model: deepseek-flash
     kimi:
       default_model: kimi-k2.7-code
   routing:
@@ -127,7 +127,7 @@ llm:
     image: kimi
 ```
 
-`.env` 或 GitHub Secrets 中的 `DEEPSEEK_MODEL`、`KIMI_MODEL` 可覆盖默认模型名。`deepseek-chat` 与 `deepseek-reasoner` 将于北京时间 2026-07-24 23:59 弃用；新配置建议直接使用 `deepseek-v4-flash`。
+`.env` 或 GitHub Secrets 中的 `DEEPSEEK_MODEL`、`KIMI_MODEL` 可覆盖默认模型名。`deepseek-chat` 与 `deepseek-reasoner` 将于北京时间 2026-07-24 23:59 弃用；新配置建议直接使用 `deepseek-flash`。
 
 视频正文目前只做检测和失败分类，不会调用 LLM 摘要。
 
@@ -185,7 +185,7 @@ Copy-Item .env.example .env
 
 ```env
 DEEPSEEK_API_KEY=your_deepseek_api_key_here
-DEEPSEEK_MODEL=deepseek-v4-flash
+DEEPSEEK_MODEL=deepseek-flash
 # 可选；PDF/图片正文摘要需要
 KIMI_API_KEY=your_kimi_api_key_here
 KIMI_MODEL=kimi-k2.7-code

@@ -26,12 +26,12 @@ jobs:
 
     steps:
       - name: Checkout watchdog code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
           cache: pip
@@ -67,7 +67,7 @@ jobs:
         id: upload_snapshot
         if: steps.heartbeat.outputs.alert_required == 'true'
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: notice-watchdog-snapshot-${{ steps.heartbeat.outputs.report_date }}-${{ steps.heartbeat.outputs.source_run_key }}
           path: ${{ steps.build_snapshot.outputs.snapshot_directory }}
@@ -88,7 +88,7 @@ jobs:
 
       - name: Send watchdog alert email
         if: always() && steps.heartbeat.outputs.alert_required == 'true' && steps.render_alert.outcome == 'success'
-        uses: dawidd6/action-send-mail@v3
+        uses: dawidd6/action-send-mail@v24
         with:
           server_address: ${{ secrets.MAIL_SERVER_ADDRESS }}
           server_port: ${{ secrets.MAIL_SERVER_PORT }}

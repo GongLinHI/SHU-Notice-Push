@@ -61,7 +61,7 @@ def test_runtime_loader_contains_no_production_urls_or_model_defaults():
     assert "gs.shu.edu.cn" not in loader
     assert "api.deepseek.com" not in loader
     assert "api.moonshot.cn" not in loader
-    assert "deepseek-v4-flash" not in loader
+    assert "deepseek-flash" not in loader
     assert "kimi-k2.7-code" not in loader
 
 
@@ -74,7 +74,7 @@ def test_runtime_yaml_is_only_source_of_production_llm_endpoints():
     assert "api.deepseek.com" not in python_source
     assert "api.moonshot.cn" not in python_source
     assert "kankanews.com" not in python_source
-    assert "deepseek-v4-flash" not in python_source
+    assert "deepseek-flash" not in python_source
     assert "kimi-k2.7-code" not in python_source
 
 

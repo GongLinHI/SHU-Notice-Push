@@ -37,7 +37,7 @@ def test_load_config_uses_defaults_and_repo_relative_paths(tmp_path):
     assert config.llm_providers["deepseek"].base_url == "https://api.deepseek.com"
     assert config.llm_providers["deepseek"].api_key_env == "DEEPSEEK_API_KEY"
     assert config.llm_providers["deepseek"].model_env == "DEEPSEEK_MODEL"
-    assert config.llm_providers["deepseek"].default_model == "deepseek-v4-flash"
+    assert config.llm_providers["deepseek"].default_model == "deepseek-flash"
     assert config.llm_providers["deepseek"].kind == "openai_text"
     assert config.llm_providers["kimi"].base_url == "https://api.moonshot.cn/v1"
     assert config.llm_providers["kimi"].api_key_env == "KIMI_API_KEY"
@@ -121,7 +121,7 @@ def test_load_config_supports_path_and_model_env_override_only(tmp_path):
     config = load_config(
         env={
             "PROMPT_NAME": "notice_summary_v2",
-            "DEEPSEEK_MODEL": "deepseek-v4-flash",
+            "DEEPSEEK_MODEL": "deepseek-flash",
             "SUMMARY_MAX_WORKERS": "2",
             "MAX_PAGES_PER_SOURCE": "7",
             "STOP_AFTER_SEEN_PAGES": "4",
@@ -136,7 +136,7 @@ def test_load_config_supports_path_and_model_env_override_only(tmp_path):
     assert config.state_path == state_path
     assert config.output_dir == output_dir
     assert config.prompt_name == "notice_summary_v1"
-    assert config.llm_providers["deepseek"].default_model == "deepseek-v4-flash"
+    assert config.llm_providers["deepseek"].default_model == "deepseek-flash"
     assert config.detail_min_chars == 30
     assert config.source_by_id("graduate_school").enabled is True
 
@@ -415,7 +415,7 @@ def test_load_config_ignores_legacy_top_level_deepseek_model(tmp_path):
     config = load_config(env={}, repo_root=tmp_path)
 
     assert not hasattr(config, "deepseek_model")
-    assert config.llm_providers["deepseek"].default_model == "deepseek-v4-flash"
+    assert config.llm_providers["deepseek"].default_model == "deepseek-flash"
 
 
 def test_load_config_reads_runtime_values_from_yaml(tmp_path):
