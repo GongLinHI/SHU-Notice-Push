@@ -2,7 +2,7 @@ name: Daily Report
 
 on:
   schedule:
-    - cron: '0 6 * * *' # 每天 UTC 06:00 触发；叠加 GitHub 调度延迟（实测中位约 4.2 小时）后，实际约在北京时间 18:00 生成
+    - cron: '17 10 * * *' # 每天 UTC 10:17（北京 18:17）触发，位于 DeepSeek 谷价时段；错开整点以降低 GitHub 调度延迟
   workflow_dispatch:
 
 concurrency:
